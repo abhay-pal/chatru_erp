@@ -12,6 +12,7 @@ import {
   NotebookTabs,
   PackageSearch,
   Plus,
+  Printer,
   ReceiptIndianRupee,
   Search,
   ShieldCheck,
@@ -203,9 +204,9 @@ export default function App() {
   });
   const [route, setRoute] = useState("operations");
   const [salesBills, setSalesBills] = useState([]);
-  const [salesStatus, setSalesStatus] = useState("Loading DB");
+  const [salesStatus, setSalesStatus] = useState("Ready");
   const [staff, setStaff] = useState(() => normalizeStaff(employees));
-  const [employeeStatus, setEmployeeStatus] = useState("Loading DB");
+  const [employeeStatus, setEmployeeStatus] = useState("Ready");
   const [materialRows, setMaterialRows] = useState(() => materials.map(normalizeMaterial));
   const [productRows, setProductRows] = useState(() => products.map(normalizeProduct));
   const [vendorRows, setVendorRows] = useState(() => vendors.map(normalizeVendor));
@@ -216,11 +217,11 @@ export default function App() {
   useEffect(() => {
     listSalesBills().then((records) => {
       setSalesBills(records);
-      setSalesStatus("Live DB connected");
+      setSalesStatus("Ready");
     });
     listEmployees(employees).then((records) => {
       setStaff(normalizeStaff(records));
-      setEmployeeStatus("Live DB connected");
+      setEmployeeStatus("Ready");
     });
     loadBusinessData().then(applyBusinessData).catch(() => {});
   }, []);
@@ -261,7 +262,7 @@ export default function App() {
     } else {
       setSalesBills((records) => [bill, ...records.filter((record) => record.billNo !== bill.billNo)]);
     }
-    setSalesStatus(result.source === "live" ? "Saved in live DB" : "Saved in local DB");
+    setSalesStatus("Saved");
     return result;
   }
 
@@ -275,7 +276,7 @@ export default function App() {
         normalizeStaff([result.record, ...records.filter((record) => record.id !== result.record.id)])
       );
     }
-    setEmployeeStatus(result.source === "live" ? "Employee saved in live DB" : "Employee saved in local DB");
+    setEmployeeStatus("Employee saved");
     return result;
   }
 
@@ -456,12 +457,20 @@ export default function App() {
 
 function LoginPage({ onLogin }) {
   const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("admin123");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [forgotMessage, setForgotMessage] = useState("");
 
   function submit(event) {
     event.preventDefault();
+    setForgotMessage("");
     setError(onLogin({ username, password }) ? "" : "Wrong username or password");
+  }
+
+  function forgotPassword() {
+    setPassword("");
+    setError("");
+    setForgotMessage("Password reset ke liye admin/owner se contact karein.");
   }
 
   return (
@@ -472,19 +481,25 @@ function LoginPage({ onLogin }) {
         <h2>Login</h2>
         <label>
           USERNAME
-          <input value={username} onChange={(event) => setUsername(event.target.value)} />
+          <input value={username} autoComplete="username" onChange={(event) => setUsername(event.target.value)} />
         </label>
         <label>
           PASSWORD
           <input
             type="password"
             value={password}
+            autoComplete="current-password"
+            placeholder="Enter password"
             onChange={(event) => setPassword(event.target.value)}
           />
         </label>
         {error && <p className="form-error">{error}</p>}
+        {forgotMessage && <p className="forgot-note">{forgotMessage}</p>}
         <button className="action-button full" type="submit">
           Login
+        </button>
+        <button className="text-button" type="button" onClick={forgotPassword}>
+          Forgot password?
         </button>
       </form>
     </main>
@@ -535,7 +550,7 @@ function Shell({ user, route, onRoute, onLogout, children }) {
         </nav>
 
         <div className="live-card">
-          <span>Live date & time</span>
+          <span>Date & time</span>
           <strong>{clock.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</strong>
           <strong>{clock.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</strong>
           <p>Muzaffarnagar main shop</p>
@@ -566,7 +581,6 @@ function Shell({ user, route, onRoute, onLogout, children }) {
               <strong>Chatru Halwai ERP</strong>
               <span>{user.name}</span>
             </div>
-            <span className="db-badge">MySQL live</span>
             <button className="icon-button" type="button" onClick={onLogout} aria-label="Logout">
               <LogOut size={18} />
             </button>
@@ -646,8 +660,8 @@ function OperationsDashboard({ salesBills, staff, materialRows, vendorRows, onSt
     <Page>
       <Metrics
         items={[
-          ["Today's sales", money(todaysSales), "Live"],
-          ["Today's expenses", money(totalExpenses), "Live"],
+          ["Today's sales", money(todaysSales), "Today"],
+          ["Today's expenses", money(totalExpenses), "Today"],
           ["Staff present", `0 / ${staff.length}`, `${staff.length} absent`],
           ["Vendor dues", money(vendorDues), `${vendorRows.length} vendors`],
         ]}
@@ -659,7 +673,7 @@ function OperationsDashboard({ salesBills, staff, materialRows, vendorRows, onSt
             <strong>82%</strong>
             <p>Sweets, breakfast and namkeen ready for counter sale.</p>
           </div>
-          {["Milk and ghee quality check", "Fresh jalebi counter live", "Gift box station stocked", "Thermal printer paper loaded"].map((item, index) => (
+          {["Milk and ghee quality check", "Fresh jalebi counter ready", "Gift box station stocked", "Thermal printer paper loaded"].map((item, index) => (
             <div className="check-row" key={item}>
               <CheckCircle2 size={17} />
               <span>{item}</span>
@@ -779,6 +793,10 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
     setItems(items.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
   }
 
+  function printSlip() {
+    window.print();
+  }
+
   async function saveBill() {
     const billNo = `${date}-${String(bills.length + 1).padStart(2, "0")}`;
     const result = await onSaveBill({
@@ -792,7 +810,7 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
       total,
       createdAt: new Date().toISOString(),
     });
-    setMessage(`Bill ${billNo} ${result.source === "live" ? "saved in live DB" : "saved in local DB"}`);
+    setMessage(`Bill ${billNo} saved`);
   }
 
   return (
@@ -820,6 +838,10 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
             </button>
             <button className="action-button dark" type="button" onClick={saveBill}>
               Save bill
+            </button>
+            <button className="action-button print-button" type="button" onClick={printSlip}>
+              <Printer size={17} />
+              Print slip
             </button>
             <button className="action-button" type="button" onClick={() => setItems([{ product: saleProducts[0].name, qty: 1 }])}>
               New bill
@@ -886,8 +908,8 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
             <h3>Chatru Halwai & Sons</h3>
             <p>Sweets & Namkeen - Muzaffarnagar</p>
             <p>Bill: {date}-{String(bills.length + 1).padStart(2, "0")}</p>
-            {rows.map((item) => (
-              <div key={`${item.product}-${item.qty}`}>
+            {rows.map((item, index) => (
+              <div key={`${item.product}-${item.qty}-${index}`}>
                 <span>{item.product} x {item.qty}</span>
                 <b>{money(item.total)}</b>
               </div>
@@ -975,7 +997,7 @@ function InventoryPage({ materialRows, productRows, onSaveMaterial, onUpdateMate
     event.preventDefault();
     const result = await onSaveMaterial(materialForm);
     setMaterialForm({ name: "", category: "Packaging", stock: 0, unit: "kg", min: 0, rate: 0 });
-    setMessage(result.source === "live" ? "Raw material saved in live DB" : "Raw material saved locally");
+    setMessage("Raw material saved");
     setModalMode(null);
   }
 
@@ -983,7 +1005,7 @@ function InventoryPage({ materialRows, productRows, onSaveMaterial, onUpdateMate
     event.preventDefault();
     const result = await onSaveProduct(productForm);
     setProductForm({ sku: "", name: "", category: "Sweets", unit: "kg", rate: 0, taxRate: 0 });
-    setMessage(result.source === "live" ? "Product saved in live DB" : "Product saved locally");
+    setMessage("Product saved");
     setModalMode(null);
   }
 
@@ -1113,7 +1135,7 @@ function VendorPaymentPage({ vendorRows, onSaveVendorPayment }) {
       paymentDate,
       notes,
     });
-    setMessage(result.source === "live" ? "Vendor payment saved in live DB" : "Vendor payment saved locally");
+    setMessage("Vendor payment saved");
     setAmount(0);
     setNotes("");
   }
@@ -1284,7 +1306,7 @@ function EmployeesPage({ staff, status, onSaveEmployee }) {
     const result = await onSaveEmployee(employee);
     const saved = normalizeEmployee(result.record, staff.length);
     setSelectedId(saved.id);
-    setMessage(result.source === "live" ? "Employee saved in live DB" : "Employee saved in local DB");
+    setMessage("Employee saved");
     setSaving(false);
     setShowForm(false);
   }
@@ -1448,7 +1470,7 @@ function VendorsPage({ vendorRows, onSaveVendor }) {
   async function submitVendor(event) {
     event.preventDefault();
     const result = await onSaveVendor(form);
-    setMessage(result.source === "live" ? "Vendor saved in live DB" : "Vendor saved locally");
+    setMessage("Vendor saved");
     setForm({ name: "", category: "Dairy", contact: "" });
     setShowForm(false);
   }
@@ -1487,7 +1509,7 @@ function ExpensesPage({ expenseRows, onSaveExpense }) {
   async function submitExpense(event) {
     event.preventDefault();
     const result = await onSaveExpense(form);
-    setMessage(result.source === "live" ? "Expense saved in live DB" : "Expense saved locally");
+    setMessage("Expense saved");
     setForm({ expenseDate: today(), label: "", category: "Staff Food", mode: "Cash", amount: 0 });
     setShowForm(false);
   }
@@ -1532,7 +1554,7 @@ function CategoriesPage({ categoryRows, onSaveCategory }) {
   async function submitCategory(event) {
     event.preventDefault();
     const result = await onSaveCategory(form);
-    setMessage(result.source === "live" ? "Category saved in live DB" : "Category saved locally");
+    setMessage("Category saved");
     setForm({ type: "Product", name: "", items: 0, margin: "New" });
     setShowForm(false);
   }
@@ -1575,7 +1597,7 @@ function UsersPage({ userRows, onSaveUser }) {
   async function submitUser(event) {
     event.preventDefault();
     const result = await onSaveUser(form);
-    setMessage(result.source === "live" ? "User saved in live DB" : "User saved locally");
+    setMessage("User saved");
     setForm({ username: "", password: "", name: "", role: "accountant", status: "Active" });
     setShowForm(false);
   }

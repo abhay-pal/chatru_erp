@@ -7,8 +7,8 @@ Fresh rebuild of the Chatru Halwai ERP front end.
 - Chatru Halwai cream/gold theme with dark sidebar
 - Login: `admin` / `admin123`
 - Operations and finance dashboards
-- Sales Slip with bill preview and live DB-backed bill history
-- Add Employee form wired to the live Chatru API, with browser DB fallback
+- Sales Slip with bill preview, print support, and saved bill history
+- Add Employee form wired to the Chatru API, with browser fallback
 - Inventory, Vendor Payment, Daily Vendors, Employees, Attendance, Vendors, Expenses, Categories, and Users
 - Shop workflow navigation excludes the manufacturing tab
 
