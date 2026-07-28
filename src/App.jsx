@@ -773,7 +773,11 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
   const [mode, setMode] = useState("Cash");
   const [date, setDate] = useState(today());
   const [historyDate, setHistoryDate] = useState(today());
+  const nextBillNo = useMemo(() => `${date}-${String(bills.length + 1).padStart(2, "0")}`, [bills.length, date]);
   const [message, setMessage] = useState(status);
+  const [billNo, setBillNo] = useState("");
+  const [savedBillKey, setSavedBillKey] = useState("");
+  const [savingBill, setSavingBill] = useState(false);
 
   const rows = items.map((item) => {
     const product = saleProducts.find((entry) => entry.name === item.product) || saleProducts[0];
@@ -784,68 +788,112 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
   const tax = gst ? (subtotal - discount) * 0.05 : 0;
   const total = Math.max(0, subtotal - Number(discount || 0) + tax);
   const filteredBills = bills.filter((bill) => !historyDate || bill.date === historyDate);
+  const activeBillNo = billNo || nextBillNo;
+  const receiptStamp = new Date().toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const currentBillKey = JSON.stringify({
+    billNo: activeBillNo,
+    date,
+    mode,
+    discount: Number(discount || 0),
+    tax,
+    total,
+    items: rows.map((item) => ({ product: item.product, qty: Number(item.qty || 0), total: item.total })),
+  });
 
   useEffect(() => {
-    setMessage(status);
-  }, [status]);
+    if (!savedBillKey) {
+      setBillNo(nextBillNo);
+    }
+  }, [nextBillNo, savedBillKey]);
 
   function updateItem(index, patch) {
     setItems(items.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
   }
 
-  function printSlip() {
-    window.print();
+  function startNewBill() {
+    const freshDate = today();
+    setItems([{ product: saleProducts[0].name, qty: 1 }]);
+    setDiscount(0);
+    setGst(false);
+    setMode("Cash");
+    setDate(freshDate);
+    setSavedBillKey("");
+    setBillNo(`${freshDate}-${String(bills.length + 1).padStart(2, "0")}`);
+    setMessage("Ready");
+  }
+
+  async function saveCurrentBill({ forPrint = false } = {}) {
+    if (savingBill) {
+      return null;
+    }
+    if (savedBillKey === currentBillKey) {
+      setMessage(`Bill ${activeBillNo} saved`);
+      return { alreadySaved: true };
+    }
+
+    setSavingBill(true);
+    try {
+      await onSaveBill({
+        billNo: activeBillNo,
+        date,
+        mode,
+        items: rows,
+        subtotal,
+        discount: Number(discount || 0),
+        tax,
+        total,
+        createdAt: new Date().toISOString(),
+      });
+      setSavedBillKey(currentBillKey);
+      setMessage(`Bill ${activeBillNo} saved${forPrint ? " - printing" : ""}`);
+      return { alreadySaved: false };
+    } catch {
+      setMessage("Bill save failed. Please try again.");
+      return null;
+    } finally {
+      setSavingBill(false);
+    }
   }
 
   async function saveBill() {
-    const billNo = `${date}-${String(bills.length + 1).padStart(2, "0")}`;
-    const result = await onSaveBill({
-      billNo,
-      date,
-      mode,
-      items: rows,
-      subtotal,
-      discount: Number(discount || 0),
-      tax,
-      total,
-      createdAt: new Date().toISOString(),
-    });
-    setMessage(`Bill ${billNo} saved`);
+    await saveCurrentBill();
+  }
+
+  async function printSlip() {
+    const saved = await saveCurrentBill({ forPrint: true });
+    if (!saved) return;
+    setTimeout(() => window.print(), 80);
   }
 
   return (
     <Page>
       <section className="grid two sales-grid">
-        <Panel title="Sales with slip print" subtitle="Counter bill">
-          <div className="sales-summary-strip">
+        <section className="panel sales-entry-panel">
+          <div className="panel-header sales-entry-header">
             <div>
-              <span>Subtotal</span>
-              <strong>{money(subtotal)}</strong>
+              <span>SALES WITH SLIP PRINT</span>
+              <h2>Counter bill</h2>
             </div>
-            <div>
-              <span>Discount</span>
-              <strong>{money(discount)}</strong>
+            <div className="button-row sales-header-actions">
+              <button className="action-button" type="button" onClick={() => setItems([...items, { product: saleProducts[0].name, qty: 1 }])}>
+                <PackageSearch size={18} />
+                Add item
+              </button>
+              <button className="action-button dark" type="button" onClick={saveBill} disabled={savingBill}>
+                <NotebookTabs size={18} />
+                {savingBill ? "Saving..." : "Save bill"}
+              </button>
+              <button className="action-button" type="button" onClick={startNewBill}>
+                <Plus size={18} />
+                New bill
+              </button>
             </div>
-            <div>
-              <span>Total</span>
-              <strong>{money(total)}</strong>
-            </div>
-          </div>
-          <div className="button-row">
-            <button className="action-button" type="button" onClick={() => setItems([...items, { product: saleProducts[0].name, qty: 1 }])}>
-              <Plus size={17} />
-              Add item
-            </button>
-            <button className="action-button dark" type="button" onClick={saveBill}>
-              Save bill
-            </button>
-            <button className="action-button print-button" type="button" onClick={printSlip}>
-              <Printer size={17} />
-              Print slip
-            </button>
-            <button className="action-button" type="button" onClick={() => setItems([{ product: saleProducts[0].name, qty: 1 }])}>
-              New bill
-            </button>
           </div>
           <div className="sale-lines">
             <div className="sale-head">
@@ -869,7 +917,7 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
                   value={item.qty}
                   onChange={(event) => updateItem(index, { qty: event.target.value })}
                 />
-                <span>{money(item.rate)} / {item.unit}</span>
+                <span className="sale-rate">{money(item.rate)} / {item.unit}</span>
                 <strong>{money(item.total)}</strong>
                 <button className="icon-button quiet" type="button" onClick={() => setItems(items.filter((_, itemIndex) => itemIndex !== index))}>
                   x
@@ -886,50 +934,53 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
               <input type="checkbox" checked={gst} onChange={(event) => setGst(event.target.checked)} />
               GST 5%
             </label>
-            <label>
-              MODE
-              <select value={mode} onChange={(event) => setMode(event.target.value)}>
-                <option>Cash</option>
-                <option>UPI</option>
-                <option>Bank</option>
-              </select>
-            </label>
-            <label>
-              DATE
-              <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
-            </label>
           </div>
           <p className="db-message">{message}</p>
-        </Panel>
+        </section>
 
-        <Panel title="Thermal slip" subtitle="Print preview">
+        <section className="panel receipt-panel">
+          <div className="panel-header receipt-header">
+            <div>
+              <span>THERMAL SLIP</span>
+              <h2>Print preview</h2>
+            </div>
+            <button className="receipt-print-button" type="button" onClick={printSlip} disabled={savingBill} aria-label="Print slip">
+              <Printer size={20} />
+            </button>
+          </div>
           <div className="thermal-slip">
             <img className="slip-logo" src="/chatru-logo.png" alt="Chatru Halwai logo" />
             <h3>Chatru Halwai & Sons</h3>
-            <p>Sweets & Namkeen - Muzaffarnagar</p>
-            <p>Bill: {date}-{String(bills.length + 1).padStart(2, "0")}</p>
+            <p className="slip-subtitle">Sweets & Namkeen - Muzaffarnagar</p>
+            <div className="slip-meta">
+              <span>Bill: {activeBillNo}</span>
+              <span>{receiptStamp}</span>
+            </div>
             {rows.map((item, index) => (
-              <div key={`${item.product}-${item.qty}-${index}`}>
+              <div className="slip-row" key={`${item.product}-${item.qty}-${index}`}>
                 <span>{item.product} x {item.qty}</span>
                 <b>{money(item.total)}</b>
               </div>
             ))}
             <hr />
-            <div><span>Subtotal</span><b>{money(subtotal)}</b></div>
-            <div><span>Discount</span><b>-{money(discount)}</b></div>
-            <div><span>Tax</span><b>{money(tax)}</b></div>
+            <div className="slip-row"><span>Subtotal</span><b>{money(subtotal)}</b></div>
+            <div className="slip-row"><span>Discount</span><b>-{money(discount)}</b></div>
+            <div className="slip-row"><span>Tax</span><b>{money(tax)}</b></div>
             <div className="slip-total"><span>Total</span><b>{money(total)}</b></div>
-            <p>Fresh daily - Pure ingredients - Thank you</p>
+            <p className="slip-footer">Fresh daily - Pure ingredients - Thank you</p>
           </div>
-        </Panel>
+        </section>
       </section>
-      <Panel title="Bill history" subtitle="Saved bills">
-        <div className="filter-row">
-          <label>
+      <section className="panel bill-history-panel">
+        <div className="panel-header history-header">
+          <div>
+            <span>BILL HISTORY</span>
+            <h2>Saved bills</h2>
+          </div>
+          <label className="history-date-control">
             DATE
             <input type="date" value={historyDate} onChange={(event) => setHistoryDate(event.target.value)} />
           </label>
-          <button className="ghost-button" type="button" onClick={() => setHistoryDate("")}>All bills</button>
         </div>
         <DataTable
           columns={["Bill No", "Date", "Items", "Mode", "Total"]}
@@ -942,7 +993,7 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
           ])}
           empty="No saved bills for selected date"
         />
-      </Panel>
+      </section>
     </Page>
   );
 }
