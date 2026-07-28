@@ -385,7 +385,7 @@ select:focus {
 
 .employee-grid {
   align-items: start;
-  grid-template-columns: minmax(300px, 0.82fr) minmax(0, 1.18fr);
+  grid-template-columns: minmax(420px, 0.88fr) minmax(520px, 1.12fr);
 }
 
 .metrics {
@@ -983,6 +983,16 @@ td {
   font-variant-numeric: tabular-nums;
 }
 
+.sales-report-panel table {
+  min-width: 0;
+}
+
+.sales-report-panel th:not(:first-child),
+.sales-report-panel td:not(:first-child) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .detail-grid strong,
 .finance-ledger strong,
 .payment-summary b {
@@ -1052,51 +1062,215 @@ td {
   padding-right: 4px;
 }
 
-.employee-list button {
+.employee-card {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fffdf8;
-  min-height: 68px;
+  min-height: 88px;
   text-align: left;
-  padding: 11px 12px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 3px 10px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
 }
 
-.employee-list button.selected {
+.employee-card.selected {
   border-color: var(--gold);
   background: var(--gold-soft);
 }
 
-.employee-list strong {
+.employee-card-main {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  text-align: left;
+}
+
+.employee-avatar {
+  width: 56px;
+  min-width: 56px;
+  height: 56px;
+  border-radius: 8px;
+  background: #070707;
+  color: white;
+  display: grid;
+  place-items: center;
+}
+
+.employee-card-main > span:last-child,
+.employee-card strong {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.employee-card strong {
+  font-size: 1.04rem;
+}
+
+.employee-card small {
+  color: var(--muted);
+  font-weight: 850;
+}
+
+.employee-card-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.employee-card-actions button {
+  width: 42px;
+  min-width: 42px;
+  min-height: 42px;
+  border: 0;
+  border-radius: 8px;
+  background: #fff7e8;
+  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.employee-card-actions button.danger {
+  background: #fff0ee;
+  color: var(--red);
+}
+
+.employee-detail-panel {
+  min-height: 620px;
+}
+
+.employee-detail-top {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 22px;
+}
+
+.employee-detail-top span {
+  color: #ff9f34;
+  font-size: 0.76rem;
+  font-weight: 950;
+}
+
+.employee-detail-top h2 {
+  margin: 4px 0 0;
+  font-size: 1.35rem;
+}
+
+.employee-fields {
+  margin: 0 0 20px;
+  display: grid;
+  gap: 14px;
+}
+
+.employee-fields div {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.35fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: baseline;
+}
+
+.employee-fields dt,
+.employee-payroll-grid span,
+.salary-month-control,
+.employee-report-section th {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.employee-fields dd {
+  margin: 0;
+  color: var(--ink);
+  font-size: 1.02rem;
+  font-weight: 850;
+}
+
+.employee-payroll-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.employee-payroll-grid article,
+.salary-month-control {
+  min-height: 102px;
+  border-radius: 8px;
+  background: #fff7e8;
+  padding: 16px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
   min-width: 0;
 }
 
-.employee-list span {
-  grid-column: 1;
+.employee-payroll-grid strong {
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--ink);
+  font-size: clamp(1.25rem, 2vw, 1.55rem);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 
-.employee-list small {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-  align-self: center;
-}
-
-.employee-list span,
-.employee-list small,
-.detail-grid span {
+.employee-payroll-grid small {
   color: var(--muted);
-  font-weight: 800;
+  font-weight: 850;
 }
 
-.detail-grid > div {
-  background: #fffdf8;
-  border: 1px solid var(--line);
+.salary-month-control {
+  color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.salary-month-control input {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  background: white;
+  font-size: 1rem;
+  font-weight: 900;
+}
+
+.employee-report-section {
+  margin-top: 20px;
+}
+
+.employee-report-section h3 {
+  margin: 0 0 12px;
+  font-size: 1.1rem;
+}
+
+.employee-report-section table {
+  min-width: 0;
+}
+
+.employee-report-section th,
+.employee-report-section td {
+  padding: 14px 16px;
+}
+
+.status-badge {
+  min-height: 34px;
   border-radius: 8px;
-  padding: 12px;
-  display: grid;
-  gap: 5px;
+  background: #e9f9ee;
+  color: #1d6f38;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  font-weight: 950;
 }
 
 .tabs {
@@ -1276,6 +1450,7 @@ td {
 
   .metrics,
   .metrics.compact,
+  .employee-payroll-grid,
   .purchase-form,
   .grid-form {
     grid-template-columns: 1fr;
@@ -1310,6 +1485,20 @@ td {
 
   .sales-entry-panel .sale-options {
     grid-template-columns: 1fr;
+  }
+
+  .employee-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .employee-card-actions {
+    margin-left: 0;
+  }
+
+  .employee-fields div {
+    grid-template-columns: 1fr;
+    gap: 4px;
   }
 
   table {

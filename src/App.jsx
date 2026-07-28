@@ -4,20 +4,25 @@ import {
   Bell,
   CalendarCheck2,
   CheckCircle2,
+  Eye,
   Handshake,
   LayoutDashboard,
   LogOut,
   Menu,
   Moon,
+  MoreVertical,
   NotebookTabs,
   PackageSearch,
+  Pencil,
   Plus,
   Printer,
   ReceiptIndianRupee,
   Search,
   ShieldCheck,
   Tags,
+  Trash2,
   Truck,
+  UserRound,
   UsersRound,
   WalletCards,
   X,
@@ -63,6 +68,10 @@ const iconMap = {
 
 function money(value) {
   return `₹${Math.round(value || 0).toLocaleString("en-IN")}`;
+}
+
+function quantity(value) {
+  return Number(value || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 });
 }
 
 function normalizeEmployee(employee, index = 0) {
@@ -280,6 +289,19 @@ export default function App() {
     return result;
   }
 
+  function updateEmployee(employee) {
+    const record = normalizeEmployee(employee);
+    setStaff((records) => normalizeStaff(records.map((item) => (item.id === record.id ? record : item))));
+    setEmployeeStatus("Employee updated");
+    return { record };
+  }
+
+  function deleteEmployee(employeeId) {
+    setStaff((records) => normalizeStaff(records.filter((item) => item.id !== String(employeeId))));
+    setEmployeeStatus("Employee removed");
+    return { id: String(employeeId) };
+  }
+
   async function persistMaterial(material) {
     const record = normalizeMaterial({ ...material, id: `MAT-${Date.now()}` });
     const payload = {
@@ -442,6 +464,8 @@ export default function App() {
         salesStatus={salesStatus}
         onSaveBill={persistBill}
         onSaveEmployee={persistEmployee}
+        onUpdateEmployee={updateEmployee}
+        onDeleteEmployee={deleteEmployee}
         onSaveMaterial={persistMaterial}
         onUpdateMaterialStock={updateMaterialStock}
         onSaveProduct={persistProduct}
@@ -607,6 +631,8 @@ function RouteView({
   salesStatus,
   onSaveBill,
   onSaveEmployee,
+  onUpdateEmployee,
+  onDeleteEmployee,
   onSaveMaterial,
   onUpdateMaterialStock,
   onSaveProduct,
@@ -641,7 +667,15 @@ function RouteView({
   }
   if (route === "daily-vendors") return <DailyVendorsPage vendorRows={vendorRows} materialRows={materialRows} />;
   if (route === "employees") {
-    return <EmployeesPage staff={staff} status={employeeStatus} onSaveEmployee={onSaveEmployee} />;
+    return (
+      <EmployeesPage
+        staff={staff}
+        status={employeeStatus}
+        onSaveEmployee={onSaveEmployee}
+        onUpdateEmployee={onUpdateEmployee}
+        onDeleteEmployee={onDeleteEmployee}
+      />
+    );
   }
   if (route === "attendance") return <AttendancePage staff={staff} />;
   if (route === "vendors") return <VendorsPage vendorRows={vendorRows} onSaveVendor={onSaveVendor} />;
@@ -788,6 +822,34 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
   const tax = gst ? (subtotal - discount) * 0.05 : 0;
   const total = Math.max(0, subtotal - Number(discount || 0) + tax);
   const filteredBills = bills.filter((bill) => !historyDate || bill.date === historyDate);
+  const dailySalesReport = useMemo(() => {
+    const byDate = new Map();
+    bills.forEach((bill) => {
+      const saleDate = bill.date || "-";
+      const record = byDate.get(saleDate) || { date: saleDate, bills: 0, qty: 0, total: 0 };
+      record.bills += 1;
+      record.qty += (bill.items || []).reduce((sum, item) => sum + Number(item.qty || 1), 0);
+      record.total += Number(bill.total || 0);
+      byDate.set(saleDate, record);
+    });
+    return Array.from(byDate.values()).sort((a, b) => b.date.localeCompare(a.date));
+  }, [bills]);
+  const itemSalesReport = useMemo(() => {
+    const byItem = new Map();
+    filteredBills.forEach((bill) => {
+      (bill.items || []).forEach((item) => {
+        const productName = item.product || "Item";
+        const product = saleProducts.find((entry) => entry.name === productName);
+        const qty = Number(item.qty || 1);
+        const amount = Number(item.total || 0) || Number(item.rate || product?.rate || 0) * qty;
+        const record = byItem.get(productName) || { product: productName, qty: 0, total: 0 };
+        record.qty += qty;
+        record.total += amount;
+        byItem.set(productName, record);
+      });
+    });
+    return Array.from(byItem.values()).sort((a, b) => b.total - a.total);
+  }, [filteredBills, saleProducts]);
   const activeBillNo = billNo || nextBillNo;
   const receiptStamp = new Date().toLocaleString("en-IN", {
     day: "2-digit",
@@ -993,6 +1055,43 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
           ])}
           empty="No saved bills for selected date"
         />
+      </section>
+      <section className="grid two sales-report-grid">
+        <section className="panel sales-report-panel">
+          <div className="panel-header">
+            <div>
+              <span>SALE REPORT</span>
+              <h2>Per day sale</h2>
+            </div>
+          </div>
+          <DataTable
+            columns={["Date", "Bills", "Qty sold", "Sale total"]}
+            rows={dailySalesReport.map((record) => [
+              record.date,
+              record.bills,
+              quantity(record.qty),
+              money(record.total),
+            ])}
+            empty="No sales report available"
+          />
+        </section>
+        <section className="panel sales-report-panel">
+          <div className="panel-header">
+            <div>
+              <span>ITEM WISE SALE</span>
+              <h2>{historyDate ? `Items sold on ${historyDate}` : "Items sold"}</h2>
+            </div>
+          </div>
+          <DataTable
+            columns={["Item", "Qty sold", "Sale amount"]}
+            rows={itemSalesReport.map((record) => [
+              record.product,
+              quantity(record.qty),
+              money(record.total),
+            ])}
+            empty="No item sale for selected date"
+          />
+        </section>
       </section>
     </Page>
   );
@@ -1312,16 +1411,24 @@ function DailyVendorsPage({ vendorRows, materialRows }) {
   );
 }
 
-function EmployeesPage({ staff, status, onSaveEmployee }) {
+function EmployeesPage({ staff, status, onSaveEmployee, onUpdateEmployee, onDeleteEmployee }) {
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(staff[0]?.id || "");
-  const [tab, setTab] = useState("Salary");
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(() => blankEmployeeForm());
+  const [editingId, setEditingId] = useState("");
+  const [salaryMonth, setSalaryMonth] = useState("2026-07");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState(status);
   const selected = staff.find((employee) => employee.id === selectedId) || staff[0];
-  const filtered = staff.filter((employee) => employee.name.toLowerCase().includes(query.toLowerCase()));
+  const filtered = staff.filter((employee) =>
+    `${employee.name} ${employee.role} ${employee.contact}`.toLowerCase().includes(query.toLowerCase())
+  );
+  const attendanceRows = [
+    ["2026-05-02", "Present", "09:00:00", "-"],
+    ["2026-05-01", "Present", "09:00:00", "-"],
+  ];
+  const salaryRows = [["-", money(0), "Cash", "0"]];
 
   useEffect(() => {
     if (!selectedId || !staff.some((employee) => employee.id === selectedId)) {
@@ -1333,8 +1440,29 @@ function EmployeesPage({ staff, status, onSaveEmployee }) {
     setMessage(status);
   }, [status]);
 
-  function openEmployeeForm() {
-    setForm(blankEmployeeForm());
+  function employeeToForm(employee) {
+    return {
+      id: employee.id,
+      name: employee.name,
+      role: employee.role,
+      contact: employee.contact === "-" ? "" : employee.contact,
+      address: employee.address === "-" ? "" : employee.address,
+      aadhaar: employee.aadhaar === "-" ? "" : employee.aadhaar,
+      joining: employee.joining,
+      salary: employee.salary,
+      shiftStart: employee.shiftStart || "09:00:00",
+      shiftEnd: employee.shiftEnd || "21:00:00",
+    };
+  }
+
+  function openEmployeeForm(employee) {
+    if (employee) {
+      setEditingId(employee.id);
+      setForm(employeeToForm(employee));
+    } else {
+      setEditingId("");
+      setForm(blankEmployeeForm());
+    }
     setShowForm(true);
   }
 
@@ -1347,35 +1475,46 @@ function EmployeesPage({ staff, status, onSaveEmployee }) {
     setSaving(true);
     const employee = normalizeEmployee({
       ...form,
-      id: `EMP-${Date.now()}`,
+      id: editingId || `EMP-${Date.now()}`,
       salary: Number(form.salary || 0),
       contact: form.contact || "-",
       aadhaar: form.aadhaar || "-",
       address: form.address || "-",
       joining: form.joining || today(),
     });
-    const result = await onSaveEmployee(employee);
-    const saved = normalizeEmployee(result.record, staff.length);
-    setSelectedId(saved.id);
-    setMessage("Employee saved");
-    setSaving(false);
-    setShowForm(false);
+    try {
+      const result = editingId ? await onUpdateEmployee(employee) : await onSaveEmployee(employee);
+      const saved = normalizeEmployee(result.record, staff.length);
+      setSelectedId(saved.id);
+      setMessage(editingId ? "Employee updated" : "Employee saved");
+      setShowForm(false);
+      setEditingId("");
+    } finally {
+      setSaving(false);
+    }
   }
 
-  if (!selected) {
-    return (
-      <Page>
-        <Panel title="Employee management" subtitle="Profiles and salary" action="Add employee" onAction={openEmployeeForm}>
-          <div className="empty-state">No employees found</div>
-        </Panel>
-      </Page>
-    );
+  function deleteEmployee(employeeId) {
+    const remaining = staff.filter((employee) => employee.id !== employeeId);
+    onDeleteEmployee(employeeId);
+    setSelectedId(remaining[0]?.id || "");
+    setMessage("Employee removed");
   }
 
   return (
     <Page>
       <section className="grid employee-grid">
-        <Panel title="Employee management" subtitle="Profiles and salary" action="Add employee" onAction={openEmployeeForm}>
+        <section className="panel employee-list-panel">
+          <div className="panel-header">
+            <div>
+              <span>EMPLOYEE MANAGEMENT</span>
+              <h2>Profiles and salary</h2>
+            </div>
+            <button className="action-button" type="button" onClick={() => openEmployeeForm()}>
+              <Plus size={17} />
+              Add employee
+            </button>
+          </div>
           <label className="inline-search">
             <Search size={17} />
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search name" />
@@ -1383,53 +1522,121 @@ function EmployeesPage({ staff, status, onSaveEmployee }) {
           <p className="db-message">{message}</p>
           <div className="employee-list">
             {filtered.map((employee) => (
-              <button className={employee.id === selectedId ? "selected" : ""} type="button" key={employee.id} onClick={() => setSelectedId(employee.id)}>
-                <strong>{employee.name}</strong>
-                <span>{employee.contact === "-" ? "No contact" : employee.contact}</span>
-                <small>{employee.joining}</small>
-              </button>
+              <article className={`employee-card ${employee.id === selectedId ? "selected" : ""}`} key={employee.id}>
+                <button className="employee-card-main" type="button" onClick={() => setSelectedId(employee.id)}>
+                  <span className="employee-avatar"><UserRound size={26} /></span>
+                  <span>
+                    <strong>{employee.name}</strong>
+                    <small>{employee.contact === "-" ? "No contact" : employee.contact}</small>
+                    <small>{employee.joining}</small>
+                  </span>
+                </button>
+                <div className="employee-card-actions">
+                  <button type="button" onClick={() => setSelectedId(employee.id)} aria-label={`View ${employee.name}`}>
+                    <Eye size={18} />
+                  </button>
+                  <button type="button" onClick={() => openEmployeeForm(employee)} aria-label={`Edit ${employee.name}`}>
+                    <Pencil size={18} />
+                  </button>
+                  <button className="danger" type="button" onClick={() => deleteEmployee(employee.id)} aria-label={`Delete ${employee.name}`}>
+                    <Trash2 size={18} />
+                  </button>
+                </div>
+              </article>
             ))}
+            {!filtered.length && <div className="empty-state">No employees found</div>}
           </div>
-        </Panel>
-        <Panel title={selected.name} subtitle="View details">
-          <div className="detail-grid">
-            {[
-              ["Contact", selected.contact],
-              ["Address", selected.address],
-              ["Aadhaar", selected.aadhaar],
-              ["Joining date", selected.joining],
-              ["Role", selected.role],
-              ["Attendance", "30 / 30"],
-            ].map(([label, value]) => (
-              <div key={label}><span>{label}</span><strong>{value}</strong></div>
-            ))}
-          </div>
-          <div className="tabs">
-            {["Salary", "Attendance", "Payroll"].map((item) => (
-              <button className={tab === item ? "active" : ""} type="button" key={item} onClick={() => setTab(item)}>{item}</button>
-            ))}
-          </div>
-          {tab === "Salary" && (
-            <Metrics
-              compact
-              items={[
-                ["Total salary", money(selected.salary), "Month 2026-07"],
-                ["Earned salary", money(selected.salary), "After leave and absent"],
-                ["Advance / paid", money(0), "Balance ₹0"],
-                ["Payable", money(selected.salary), "Earned - paid"],
-              ]}
-            />
+        </section>
+        <section className="panel employee-detail-panel">
+          {selected ? (
+            <>
+              <div className="employee-detail-top">
+                <div>
+                  <span>VIEW DETAILS</span>
+                  <h2>{selected.name}</h2>
+                </div>
+                <button className="icon-button quiet" type="button" aria-label="Employee menu">
+                  <MoreVertical size={20} />
+                </button>
+              </div>
+              <dl className="employee-fields">
+                <div><dt>Contact</dt><dd>{selected.contact}</dd></div>
+                <div><dt>Address</dt><dd>{selected.address}</dd></div>
+                <div><dt>Aadhaar</dt><dd>{selected.aadhaar}</dd></div>
+                <div><dt>Joining date</dt><dd>{selected.joining}</dd></div>
+                <div><dt>Role</dt><dd>{selected.role}</dd></div>
+              </dl>
+              <div className="employee-payroll-grid">
+                <article>
+                  <span>Attendance</span>
+                  <strong>30 / 30</strong>
+                  <small>P 0 | A 0 | L 0</small>
+                </article>
+                <article>
+                  <span>Total salary</span>
+                  <strong>{money(selected.salary)}</strong>
+                  <small>Month {salaryMonth}</small>
+                </article>
+                <article>
+                  <span>Earned salary</span>
+                  <strong>{money(selected.salary)}</strong>
+                  <small>After leave and absent</small>
+                </article>
+                <article>
+                  <span>Advance / paid</span>
+                  <strong>{money(0)}</strong>
+                  <small>Balance ₹0</small>
+                </article>
+                <article>
+                  <span>Payable</span>
+                  <strong>{money(selected.salary)}</strong>
+                  <small>Earned - paid</small>
+                </article>
+                <label className="salary-month-control">
+                  SALARY MONTH
+                  <input type="month" value={salaryMonth} onChange={(event) => setSalaryMonth(event.target.value)} />
+                </label>
+              </div>
+              <section className="employee-report-section">
+                <h3>Attendance history</h3>
+                <table>
+                  <thead><tr><th>Date</th><th>Status</th><th>In</th><th>Out</th></tr></thead>
+                  <tbody>
+                    {attendanceRows.map(([day, rowStatus, inTime, outTime]) => (
+                      <tr key={day}>
+                        <td>{day}</td>
+                        <td><span className="status-badge">{rowStatus}</span></td>
+                        <td>{inTime}</td>
+                        <td>{outTime}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </section>
+              <section className="employee-report-section">
+                <h3>Salary payments</h3>
+                <table>
+                  <thead><tr><th>Date</th><th>Amount</th><th>Mode</th><th>Leave</th></tr></thead>
+                  <tbody>
+                    {salaryRows.map(([day, amount, rowMode, leave]) => (
+                      <tr key={`${day}-${amount}`}>
+                        <td>{day}</td>
+                        <td>{amount}</td>
+                        <td>{rowMode}</td>
+                        <td>{leave}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </section>
+            </>
+          ) : (
+            <div className="empty-state">Select or add an employee</div>
           )}
-          {tab === "Attendance" && (
-            <DataTable columns={["Date", "Status", "In", "Out"]} rows={[["2026-05-02", "Present", "09:00:00", "-"], ["2026-05-01", "Present", "09:00:00", "-"]]} />
-          )}
-          {tab === "Payroll" && (
-            <DataTable columns={["Date", "Amount", "Mode", "Leave"]} rows={[["2026-07-01", money(0), "Cash", "0"], ["2026-06-01", money(12000), "UPI", "1"]]} />
-          )}
-        </Panel>
+        </section>
       </section>
       {showForm && (
-        <Modal title="Add employee" onClose={() => setShowForm(false)}>
+        <Modal title={editingId ? "Edit employee" : "Add employee"} onClose={() => setShowForm(false)}>
           <form className="modal-form grid-form" onSubmit={submitEmployee}>
             <label className="field">
               <span>Name</span>
