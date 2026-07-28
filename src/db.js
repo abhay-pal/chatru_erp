@@ -179,6 +179,19 @@ function toEmployeePayload(employee) {
   };
 }
 
+export async function loadBusinessData() {
+  return apiRequest("/api/bootstrap");
+}
+
+export async function createBusinessRecord(path, record) {
+  try {
+    const result = await apiRequest(path, { method: "POST", body: record });
+    return { record: result.record || result.item || result, bootstrap: result.bootstrap, source: "live" };
+  } catch {
+    return { record, bootstrap: null, source: "local" };
+  }
+}
+
 export async function listSalesBills() {
   try {
     const bootstrap = await apiRequest("/api/bootstrap");

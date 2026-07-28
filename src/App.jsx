@@ -33,7 +33,14 @@ import {
   users,
   vendors,
 } from "./data";
-import { listEmployees, listSalesBills, saveEmployee, saveSalesBill } from "./db";
+import {
+  createBusinessRecord,
+  listEmployees,
+  listSalesBills,
+  loadBusinessData,
+  saveEmployee,
+  saveSalesBill,
+} from "./db";
 
 const SESSION_KEY = "chatru-halwai-session";
 const today = () => new Date().toISOString().slice(0, 10);
@@ -99,6 +106,84 @@ function blankEmployeeForm() {
   };
 }
 
+function normalizeMaterial(item, index = 0) {
+  return {
+    id: String(item.id || item.name || `MAT-${index + 1}`),
+    name: item.name || "Raw material",
+    category: item.category || "General",
+    stock: Number(item.stock || 0),
+    unit: item.unit || "kg",
+    min: Number(item.min || 0),
+    rate: Number(item.rate || 0),
+    inToday: Number(item.inToday || 0),
+    outToday: Number(item.outToday || 0),
+    wastage: Number(item.wastage || 0),
+  };
+}
+
+function normalizeProduct(item, index = 0) {
+  return {
+    id: String(item.id || item.sku || item.name || `PRD-${index + 1}`),
+    sku: item.sku || `PRD-${String(index + 1).padStart(3, "0")}`,
+    name: item.name || "Product",
+    category: item.category || "Sweets",
+    unit: item.unit || "kg",
+    stock: Number(item.stock || 0),
+    rate: Number(item.rate || 0),
+    min: Number(item.min || 0),
+    taxRate: Number(item.taxRate ?? item.gstPercent ?? 0),
+  };
+}
+
+function normalizeVendor(item, index = 0) {
+  return {
+    id: String(item.id || item.name || `VEN-${index + 1}`),
+    name: item.name || "Vendor",
+    category: item.category || "General",
+    contact: item.contact || "-",
+    purchases: Number(item.purchases || 0),
+    pending: Number(item.pending || 0),
+    lastPaid: Number(item.lastPaid || 0),
+    cycle: item.cycle || "Weekly",
+  };
+}
+
+function normalizeExpense(item, index = 0) {
+  return {
+    id: String(item.id || `EXP-${index + 1}`),
+    date: item.date || item.expenseDate || today(),
+    expenseDate: item.expenseDate || item.date || today(),
+    title: item.title || item.label || "Expense",
+    label: item.label || item.title || "Expense",
+    category: item.category || "General",
+    mode: item.mode || "Cash",
+    amount: Number(item.amount || 0),
+  };
+}
+
+function normalizeCategory(item, index = 0) {
+  return {
+    id: String(item.id || `${item.type}-${item.name}` || `CAT-${index + 1}`),
+    type: item.type || "Product",
+    name: item.name || "Category",
+    count: Number(item.count ?? item.items ?? 0),
+    items: Number(item.items ?? item.count ?? 0),
+    cadence: item.cadence || item.margin || "New",
+    margin: item.margin || item.cadence || "New",
+  };
+}
+
+function normalizeUser(item, index = 0) {
+  return {
+    id: String(item.id || item.username || `USR-${index + 1}`),
+    username: item.username || "user",
+    name: item.name || "User",
+    role: item.role || "accountant",
+    status: item.status || "Active",
+    protected: item.protected ?? item.username === "admin",
+  };
+}
+
 function useClock() {
   const [clock, setClock] = useState(new Date());
   useEffect(() => {
@@ -121,6 +206,12 @@ export default function App() {
   const [salesStatus, setSalesStatus] = useState("Loading DB");
   const [staff, setStaff] = useState(() => normalizeStaff(employees));
   const [employeeStatus, setEmployeeStatus] = useState("Loading DB");
+  const [materialRows, setMaterialRows] = useState(() => materials.map(normalizeMaterial));
+  const [productRows, setProductRows] = useState(() => products.map(normalizeProduct));
+  const [vendorRows, setVendorRows] = useState(() => vendors.map(normalizeVendor));
+  const [expenseRows, setExpenseRows] = useState(() => seededExpenses.map(normalizeExpense));
+  const [categoryRows, setCategoryRows] = useState(() => categories.map(normalizeCategory));
+  const [userRows, setUserRows] = useState(() => users.map(normalizeUser));
 
   useEffect(() => {
     listSalesBills().then((records) => {
@@ -131,7 +222,17 @@ export default function App() {
       setStaff(normalizeStaff(records));
       setEmployeeStatus("Live DB connected");
     });
+    loadBusinessData().then(applyBusinessData).catch(() => {});
   }, []);
+
+  function applyBusinessData(data) {
+    if (data.rawStock) setMaterialRows(data.rawStock.map(normalizeMaterial));
+    if (data.products) setProductRows(data.products.map(normalizeProduct));
+    if (data.vendors) setVendorRows(data.vendors.map(normalizeVendor));
+    if (data.expenses) setExpenseRows(data.expenses.map(normalizeExpense));
+    if (data.categories) setCategoryRows(data.categories.map(normalizeCategory));
+    if (data.users) setUserRows(data.users.map(normalizeUser));
+  }
 
   function login(credentials) {
     if (
@@ -178,6 +279,147 @@ export default function App() {
     return result;
   }
 
+  async function persistMaterial(material) {
+    const record = normalizeMaterial({ ...material, id: `MAT-${Date.now()}` });
+    const payload = {
+      name: record.name,
+      category: record.category,
+      stock: record.stock,
+      unit: record.unit,
+      min: record.min,
+      rate: record.rate,
+    };
+    const result = await createBusinessRecord("/api/raw-stock", payload);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setMaterialRows((records) => [record, ...records]);
+    }
+    return result;
+  }
+
+  function updateMaterialStock(materialId, patch) {
+    setMaterialRows((records) =>
+      records.map((record) =>
+        record.id === String(materialId)
+          ? normalizeMaterial({
+              ...record,
+              ...patch,
+              stock: Number(patch.stock ?? record.stock),
+              inToday: Number(patch.inToday ?? record.inToday),
+              outToday: Number(patch.outToday ?? record.outToday),
+              wastage: Number(patch.wastage ?? record.wastage),
+            })
+          : record
+      )
+    );
+    return { source: "local" };
+  }
+
+  async function persistProduct(product) {
+    const record = normalizeProduct({ ...product, id: `PRD-${Date.now()}` });
+    const payload = {
+      sku: record.sku,
+      name: record.name,
+      category: record.category,
+      unit: record.unit,
+      rate: record.rate,
+      taxRate: record.taxRate,
+    };
+    const result = await createBusinessRecord("/api/products", payload);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setProductRows((records) => [record, ...records]);
+    }
+    return result;
+  }
+
+  async function persistVendor(vendor) {
+    const record = normalizeVendor({ ...vendor, id: `VEN-${Date.now()}` });
+    const payload = {
+      name: record.name,
+      category: record.category,
+      contact: record.contact === "-" ? "" : record.contact,
+    };
+    const result = await createBusinessRecord("/api/vendors", payload);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setVendorRows((records) => [record, ...records]);
+    }
+    return result;
+  }
+
+  async function persistVendorPayment(payment) {
+    const result = await createBusinessRecord("/api/vendor-payments", payment);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setVendorRows((records) =>
+        records.map((vendor) =>
+          vendor.id === String(payment.vendorId)
+            ? { ...vendor, pending: Math.max(0, vendor.pending - Number(payment.amount || 0)), lastPaid: Number(payment.amount || 0) }
+            : vendor
+        )
+      );
+    }
+    return result;
+  }
+
+  async function persistExpense(expense) {
+    const record = normalizeExpense({ ...expense, id: `EXP-${Date.now()}` });
+    const payload = {
+      expenseDate: record.expenseDate,
+      label: record.label,
+      category: record.category,
+      amount: record.amount,
+      mode: record.mode,
+    };
+    const result = await createBusinessRecord("/api/expenses", payload);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setExpenseRows((records) => [record, ...records]);
+    }
+    return result;
+  }
+
+  async function persistCategory(category) {
+    const record = normalizeCategory({ ...category, id: `CAT-${Date.now()}` });
+    const payload = {
+      type: record.type,
+      name: record.name,
+      items: record.items,
+      margin: record.margin,
+    };
+    const result = await createBusinessRecord("/api/categories", payload);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setCategoryRows((records) => [record, ...records]);
+    }
+    return result;
+  }
+
+  async function persistUser(user) {
+    const record = normalizeUser({ ...user, id: `USR-${Date.now()}` });
+    const payload = {
+      username: record.username,
+      password: user.password,
+      name: record.name,
+      role: record.role,
+      status: record.status,
+    };
+    const result = await createBusinessRecord("/api/users", payload);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setUserRows((records) => [record, ...records]);
+    }
+    return result;
+  }
+
   if (!session) {
     return <LoginPage onLogin={login} />;
   }
@@ -186,12 +428,27 @@ export default function App() {
     <Shell user={session} route={route} onRoute={setRoute} onLogout={logout}>
       <RouteView
         route={route}
+        onRoute={setRoute}
         staff={staff}
         employeeStatus={employeeStatus}
+        materialRows={materialRows}
+        productRows={productRows}
+        vendorRows={vendorRows}
+        expenseRows={expenseRows}
+        categoryRows={categoryRows}
+        userRows={userRows}
         salesBills={salesBills}
         salesStatus={salesStatus}
         onSaveBill={persistBill}
         onSaveEmployee={persistEmployee}
+        onSaveMaterial={persistMaterial}
+        onUpdateMaterialStock={updateMaterialStock}
+        onSaveProduct={persistProduct}
+        onSaveVendor={persistVendor}
+        onSaveVendorPayment={persistVendorPayment}
+        onSaveExpense={persistExpense}
+        onSaveCategory={persistCategory}
+        onSaveUser={persistUser}
       />
     </Shell>
   );
@@ -321,30 +578,69 @@ function Shell({ user, route, onRoute, onLogout, children }) {
   );
 }
 
-function RouteView({ route, staff, employeeStatus, salesBills, salesStatus, onSaveBill, onSaveEmployee }) {
-  if (route === "operations") return <OperationsDashboard salesBills={salesBills} staff={staff} />;
-  if (route === "finance") return <FinanceDashboard salesBills={salesBills} staff={staff} />;
-  if (route === "sales-slip") {
-    return <SalesSlipPage bills={salesBills} status={salesStatus} onSaveBill={onSaveBill} />;
+function RouteView({
+  route,
+  onRoute,
+  staff,
+  employeeStatus,
+  materialRows,
+  productRows,
+  vendorRows,
+  expenseRows,
+  categoryRows,
+  userRows,
+  salesBills,
+  salesStatus,
+  onSaveBill,
+  onSaveEmployee,
+  onSaveMaterial,
+  onUpdateMaterialStock,
+  onSaveProduct,
+  onSaveVendor,
+  onSaveVendorPayment,
+  onSaveExpense,
+  onSaveCategory,
+  onSaveUser,
+}) {
+  if (route === "operations") {
+    return <OperationsDashboard salesBills={salesBills} staff={staff} materialRows={materialRows} vendorRows={vendorRows} onStartBill={() => onRoute("sales-slip")} />;
   }
-  if (route === "inventory") return <InventoryPage />;
-  if (route === "vendor-payment") return <VendorPaymentPage />;
-  if (route === "daily-vendors") return <DailyVendorsPage />;
+  if (route === "finance") {
+    return <FinanceDashboard salesBills={salesBills} staff={staff} expenseRows={expenseRows} vendorRows={vendorRows} />;
+  }
+  if (route === "sales-slip") {
+    return <SalesSlipPage bills={salesBills} status={salesStatus} productRows={productRows} onSaveBill={onSaveBill} />;
+  }
+  if (route === "inventory") {
+    return (
+      <InventoryPage
+        materialRows={materialRows}
+        productRows={productRows}
+        onSaveMaterial={onSaveMaterial}
+        onUpdateMaterialStock={onUpdateMaterialStock}
+        onSaveProduct={onSaveProduct}
+      />
+    );
+  }
+  if (route === "vendor-payment") {
+    return <VendorPaymentPage vendorRows={vendorRows} onSaveVendorPayment={onSaveVendorPayment} />;
+  }
+  if (route === "daily-vendors") return <DailyVendorsPage vendorRows={vendorRows} materialRows={materialRows} />;
   if (route === "employees") {
     return <EmployeesPage staff={staff} status={employeeStatus} onSaveEmployee={onSaveEmployee} />;
   }
   if (route === "attendance") return <AttendancePage staff={staff} />;
-  if (route === "vendors") return <VendorsPage />;
-  if (route === "expenses") return <ExpensesPage />;
-  if (route === "categories") return <CategoriesPage />;
-  if (route === "users") return <UsersPage />;
+  if (route === "vendors") return <VendorsPage vendorRows={vendorRows} onSaveVendor={onSaveVendor} />;
+  if (route === "expenses") return <ExpensesPage expenseRows={expenseRows} onSaveExpense={onSaveExpense} />;
+  if (route === "categories") return <CategoriesPage categoryRows={categoryRows} onSaveCategory={onSaveCategory} />;
+  if (route === "users") return <UsersPage userRows={userRows} onSaveUser={onSaveUser} />;
   return null;
 }
 
-function OperationsDashboard({ salesBills, staff }) {
+function OperationsDashboard({ salesBills, staff, materialRows, vendorRows, onStartBill }) {
   const todaysSales = totalForDate(salesBills, today());
   const totalExpenses = seededExpenses.reduce((sum, item) => sum + item.amount, 0);
-  const vendorDues = vendors.reduce((sum, item) => sum + item.pending, 0);
+  const vendorDues = vendorRows.reduce((sum, item) => sum + item.pending, 0);
 
   return (
     <Page>
@@ -353,11 +649,11 @@ function OperationsDashboard({ salesBills, staff }) {
           ["Today's sales", money(todaysSales), "Live"],
           ["Today's expenses", money(totalExpenses), "Live"],
           ["Staff present", `0 / ${staff.length}`, `${staff.length} absent`],
-          ["Vendor dues", money(vendorDues), `${vendors.length} vendors`],
+          ["Vendor dues", money(vendorDues), `${vendorRows.length} vendors`],
         ]}
       />
       <section className="grid two">
-        <Panel title="Operations dashboard" subtitle="Today's shop pulse" action="New bill">
+        <Panel title="Operations dashboard" subtitle="Today's shop pulse" action="New bill" onAction={onStartBill}>
           <div className="batch-card">
             <span>FRESH BATCH</span>
             <strong>82%</strong>
@@ -373,7 +669,7 @@ function OperationsDashboard({ salesBills, staff }) {
         </Panel>
         <Panel title="Low stock" subtitle="Material alerts">
           <div className="stock-alerts">
-            {materials
+            {materialRows
               .filter((material) => material.stock <= material.min)
               .map((material) => (
                 <div key={material.name}>
@@ -397,12 +693,12 @@ function OperationsDashboard({ salesBills, staff }) {
   );
 }
 
-function FinanceDashboard({ salesBills, staff }) {
+function FinanceDashboard({ salesBills, staff, expenseRows, vendorRows }) {
   const monthSales = salesBills.reduce((sum, bill) => sum + bill.total, 0);
-  const totalExpenses = seededExpenses.reduce((sum, item) => sum + item.amount, 0);
+  const totalExpenses = expenseRows.reduce((sum, item) => sum + item.amount, 0);
   const purchases = seededPurchases.reduce((sum, item) => sum + item.qty * item.rate, 0);
   const salary = staff.reduce((sum, item) => sum + item.salary, 0);
-  const vendorDues = vendors.reduce((sum, item) => sum + item.pending, 0);
+  const vendorDues = vendorRows.reduce((sum, item) => sum + item.pending, 0);
 
   return (
     <Page>
@@ -444,14 +740,15 @@ function FinanceDashboard({ salesBills, staff }) {
       <Panel title="Expense summary" subtitle="Daily costs">
         <DataTable
           columns={["Date", "Category", "Mode", "Amount"]}
-          rows={seededExpenses.map((expense) => [expense.date, expense.category, expense.mode, money(expense.amount)])}
+          rows={expenseRows.map((expense) => [expense.date, expense.category, expense.mode, money(expense.amount)])}
         />
       </Panel>
     </Page>
   );
 }
 
-function SalesSlipPage({ bills, status, onSaveBill }) {
+function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
+  const saleProducts = productRows.length ? productRows : products.map(normalizeProduct);
   const [items, setItems] = useState([
     { product: "Kaju Katli", qty: 1.25 },
     { product: "Assorted Gift Box", qty: 2 },
@@ -465,7 +762,7 @@ function SalesSlipPage({ bills, status, onSaveBill }) {
   const [message, setMessage] = useState(status);
 
   const rows = items.map((item) => {
-    const product = products.find((entry) => entry.name === item.product) || products[0];
+    const product = saleProducts.find((entry) => entry.name === item.product) || saleProducts[0];
     const total = product.rate * Number(item.qty || 0);
     return { ...item, rate: product.rate, unit: product.unit, total };
   });
@@ -502,15 +799,29 @@ function SalesSlipPage({ bills, status, onSaveBill }) {
     <Page>
       <section className="grid two sales-grid">
         <Panel title="Sales with slip print" subtitle="Counter bill">
+          <div className="sales-summary-strip">
+            <div>
+              <span>Subtotal</span>
+              <strong>{money(subtotal)}</strong>
+            </div>
+            <div>
+              <span>Discount</span>
+              <strong>{money(discount)}</strong>
+            </div>
+            <div>
+              <span>Total</span>
+              <strong>{money(total)}</strong>
+            </div>
+          </div>
           <div className="button-row">
-            <button className="action-button" type="button" onClick={() => setItems([...items, { product: products[0].name, qty: 1 }])}>
+            <button className="action-button" type="button" onClick={() => setItems([...items, { product: saleProducts[0].name, qty: 1 }])}>
               <Plus size={17} />
               Add item
             </button>
             <button className="action-button dark" type="button" onClick={saveBill}>
               Save bill
             </button>
-            <button className="action-button" type="button" onClick={() => setItems([{ product: products[0].name, qty: 1 }])}>
+            <button className="action-button" type="button" onClick={() => setItems([{ product: saleProducts[0].name, qty: 1 }])}>
               New bill
             </button>
           </div>
@@ -525,7 +836,7 @@ function SalesSlipPage({ bills, status, onSaveBill }) {
             {rows.map((item, index) => (
               <div className="sale-line" key={`${item.product}-${index}`}>
                 <select value={item.product} onChange={(event) => updateItem(index, { product: event.target.value })}>
-                  {products.map((product) => (
+                  {saleProducts.map((product) => (
                     <option key={product.name}>{product.name}</option>
                   ))}
                 </select>
@@ -614,44 +925,198 @@ function SalesSlipPage({ bills, status, onSaveBill }) {
   );
 }
 
-function InventoryPage() {
+function InventoryPage({ materialRows, productRows, onSaveMaterial, onUpdateMaterialStock, onSaveProduct }) {
+  const [modalMode, setModalMode] = useState(null);
+  const [materialForm, setMaterialForm] = useState({
+    name: "",
+    category: "Packaging",
+    stock: 0,
+    unit: "kg",
+    min: 0,
+    rate: 0,
+  });
+  const [productForm, setProductForm] = useState({
+    sku: "",
+    name: "",
+    category: "Sweets",
+    unit: "kg",
+    rate: 0,
+    taxRate: 0,
+  });
+  const [stockForm, setStockForm] = useState({
+    id: materialRows[0]?.id || "",
+    stock: materialRows[0]?.stock || 0,
+    inToday: 0,
+    outToday: 0,
+    wastage: 0,
+  });
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    const selected = materialRows.find((material) => material.id === stockForm.id) || materialRows[0];
+    if (selected && !stockForm.id) {
+      setStockForm((current) => ({ ...current, id: selected.id, stock: selected.stock }));
+    }
+  }, [materialRows, stockForm.id]);
+
+  function openStockUpdate() {
+    const first = materialRows[0];
+    setStockForm({
+      id: first?.id || "",
+      stock: first?.stock || 0,
+      inToday: first?.inToday || 0,
+      outToday: first?.outToday || 0,
+      wastage: first?.wastage || 0,
+    });
+    setModalMode("stock");
+  }
+
+  async function submitMaterial(event) {
+    event.preventDefault();
+    const result = await onSaveMaterial(materialForm);
+    setMaterialForm({ name: "", category: "Packaging", stock: 0, unit: "kg", min: 0, rate: 0 });
+    setMessage(result.source === "live" ? "Raw material saved in live DB" : "Raw material saved locally");
+    setModalMode(null);
+  }
+
+  async function submitProduct(event) {
+    event.preventDefault();
+    const result = await onSaveProduct(productForm);
+    setProductForm({ sku: "", name: "", category: "Sweets", unit: "kg", rate: 0, taxRate: 0 });
+    setMessage(result.source === "live" ? "Product saved in live DB" : "Product saved locally");
+    setModalMode(null);
+  }
+
+  function submitStock(event) {
+    event.preventDefault();
+    const selected = materialRows.find((material) => material.id === stockForm.id);
+    const nextStock =
+      Number(stockForm.stock || 0) +
+      Number(stockForm.inToday || 0) -
+      Number(stockForm.outToday || 0) -
+      Number(stockForm.wastage || 0);
+    onUpdateMaterialStock(stockForm.id, { ...stockForm, stock: Math.max(0, nextStock) });
+    setMessage(`${selected?.name || "Stock"} updated`);
+    setModalMode(null);
+  }
+
   return (
     <Page>
-      <Panel title="Inventory management" subtitle="Raw material stock" action="Add raw material" secondAction="Update stock">
+      <Panel
+        title="Inventory management"
+        subtitle="Raw material stock"
+        action="Add raw material"
+        secondAction="Update stock"
+        onAction={() => setModalMode("material")}
+        onSecondAction={openStockUpdate}
+      >
+        {message && <p className="db-message">{message}</p>}
         <DataTable
           columns={["Material", "Category", "Stock", "In", "Out", "Wastage", "Action"]}
-          rows={materials.map((material) => [
+          rows={materialRows.map((material) => [
             material.name,
             material.category,
             `${material.stock} ${material.unit} / Min ${material.min}`,
-            `0 ${material.unit}`,
-            `0 ${material.unit}`,
-            `0 ${material.unit}`,
+            `${material.inToday} ${material.unit}`,
+            `${material.outToday} ${material.unit}`,
+            `${material.wastage} ${material.unit}`,
             "Edit",
           ])}
         />
       </Panel>
-      <Panel title="Finished goods" subtitle="Ready stock" action="Add product">
+      <Panel title="Finished goods" subtitle="Ready stock" action="Add product" onAction={() => setModalMode("product")}>
         <div className="product-grid">
-          {products.slice(2).map((product) => (
+          {productRows.map((product) => (
             <article key={product.name}>
               <span>{product.category.toUpperCase()}</span>
               <strong>{product.name}</strong>
-              <p>{product.unit === "pc" ? "38 pcs" : "18 tray"} - {money(product.rate)}</p>
+              <p>{product.stock ? `${product.stock} ${product.unit}` : product.unit} - {money(product.rate)}</p>
             </article>
           ))}
         </div>
       </Panel>
+      {modalMode === "material" && (
+        <Modal title="Add raw material" eyebrow="Inventory record" onClose={() => setModalMode(null)}>
+          <form className="modal-form grid-form" onSubmit={submitMaterial}>
+            <label className="field"><span>Name</span><input required value={materialForm.name} onChange={(event) => setMaterialForm({ ...materialForm, name: event.target.value })} /></label>
+            <label className="field"><span>Category</span><input value={materialForm.category} onChange={(event) => setMaterialForm({ ...materialForm, category: event.target.value })} /></label>
+            <label className="field"><span>Stock</span><input type="number" value={materialForm.stock} onChange={(event) => setMaterialForm({ ...materialForm, stock: event.target.value })} /></label>
+            <label className="field"><span>Unit</span><input value={materialForm.unit} onChange={(event) => setMaterialForm({ ...materialForm, unit: event.target.value })} /></label>
+            <label className="field"><span>Minimum</span><input type="number" value={materialForm.min} onChange={(event) => setMaterialForm({ ...materialForm, min: event.target.value })} /></label>
+            <label className="field"><span>Rate</span><input type="number" value={materialForm.rate} onChange={(event) => setMaterialForm({ ...materialForm, rate: event.target.value })} /></label>
+            <button className="action-button full" type="submit">Save raw material</button>
+          </form>
+        </Modal>
+      )}
+      {modalMode === "stock" && (
+        <Modal title="Update stock" eyebrow="Inventory record" onClose={() => setModalMode(null)}>
+          <form className="modal-form grid-form" onSubmit={submitStock}>
+            <label className="field full">
+              <span>Material</span>
+              <select
+                value={stockForm.id}
+                onChange={(event) => {
+                  const selected = materialRows.find((material) => material.id === event.target.value);
+                  setStockForm({ id: event.target.value, stock: selected?.stock || 0, inToday: 0, outToday: 0, wastage: 0 });
+                }}
+              >
+                {materialRows.map((material) => <option key={material.id} value={material.id}>{material.name}</option>)}
+              </select>
+            </label>
+            <label className="field"><span>Current stock</span><input type="number" value={stockForm.stock} onChange={(event) => setStockForm({ ...stockForm, stock: event.target.value })} /></label>
+            <label className="field"><span>In today</span><input type="number" value={stockForm.inToday} onChange={(event) => setStockForm({ ...stockForm, inToday: event.target.value })} /></label>
+            <label className="field"><span>Out today</span><input type="number" value={stockForm.outToday} onChange={(event) => setStockForm({ ...stockForm, outToday: event.target.value })} /></label>
+            <label className="field"><span>Wastage</span><input type="number" value={stockForm.wastage} onChange={(event) => setStockForm({ ...stockForm, wastage: event.target.value })} /></label>
+            <button className="action-button full" type="submit">Update stock</button>
+          </form>
+        </Modal>
+      )}
+      {modalMode === "product" && (
+        <Modal title="Add product" eyebrow="Finished goods" onClose={() => setModalMode(null)}>
+          <form className="modal-form grid-form" onSubmit={submitProduct}>
+            <label className="field"><span>SKU</span><input value={productForm.sku} onChange={(event) => setProductForm({ ...productForm, sku: event.target.value })} /></label>
+            <label className="field"><span>Name</span><input required value={productForm.name} onChange={(event) => setProductForm({ ...productForm, name: event.target.value })} /></label>
+            <label className="field"><span>Category</span><input value={productForm.category} onChange={(event) => setProductForm({ ...productForm, category: event.target.value })} /></label>
+            <label className="field"><span>Unit</span><input value={productForm.unit} onChange={(event) => setProductForm({ ...productForm, unit: event.target.value })} /></label>
+            <label className="field"><span>Rate</span><input type="number" value={productForm.rate} onChange={(event) => setProductForm({ ...productForm, rate: event.target.value })} /></label>
+            <label className="field"><span>GST %</span><input type="number" value={productForm.taxRate} onChange={(event) => setProductForm({ ...productForm, taxRate: event.target.value })} /></label>
+            <button className="action-button full" type="submit">Save product</button>
+          </form>
+        </Modal>
+      )}
     </Page>
   );
 }
 
-function VendorPaymentPage() {
-  const [vendorName, setVendorName] = useState(vendors[3].name);
+function VendorPaymentPage({ vendorRows, onSaveVendorPayment }) {
+  const [vendorId, setVendorId] = useState(vendorRows[3]?.id || vendorRows[0]?.id || "");
   const [amount, setAmount] = useState(25000);
   const [mode, setMode] = useState("UPI");
-  const selected = vendors.find((vendor) => vendor.name === vendorName) || vendors[0];
+  const [paymentDate, setPaymentDate] = useState(today());
+  const [notes, setNotes] = useState("");
+  const [message, setMessage] = useState("");
+  const selected = vendorRows.find((vendor) => vendor.id === vendorId) || vendorRows[0] || { id: "", name: "Vendor", pending: 0 };
   const balance = Math.max(0, selected.pending - Number(amount || 0));
+
+  useEffect(() => {
+    if (!vendorId && vendorRows[0]) {
+      setVendorId(vendorRows[0].id);
+    }
+  }, [vendorId, vendorRows]);
+
+  async function submitPayment() {
+    if (!selected) return;
+    const result = await onSaveVendorPayment({
+      vendorId: selected.id,
+      amount: Number(amount || 0),
+      mode,
+      paymentDate,
+      notes,
+    });
+    setMessage(result.source === "live" ? "Vendor payment saved in live DB" : "Vendor payment saved locally");
+    setAmount(0);
+    setNotes("");
+  }
 
   return (
     <Page>
@@ -667,9 +1132,9 @@ function VendorPaymentPage() {
             </label>
             <label>
               VENDOR
-              <select value={vendorName} onChange={(event) => setVendorName(event.target.value)}>
-                {vendors.map((vendor) => (
-                  <option key={vendor.name}>{vendor.name}</option>
+              <select value={vendorId} onChange={(event) => setVendorId(event.target.value)}>
+                {vendorRows.map((vendor) => (
+                  <option key={vendor.id} value={vendor.id}>{vendor.name}</option>
                 ))}
               </select>
             </label>
@@ -686,11 +1151,11 @@ function VendorPaymentPage() {
             </label>
             <label>
               DATE
-              <input type="date" defaultValue={today()} />
+              <input type="date" value={paymentDate} onChange={(event) => setPaymentDate(event.target.value)} />
             </label>
             <label>
               NOTES
-              <input placeholder="Payment note" />
+              <input placeholder="Payment note" value={notes} onChange={(event) => setNotes(event.target.value)} />
             </label>
           </div>
           <div className="payment-summary">
@@ -698,12 +1163,13 @@ function VendorPaymentPage() {
             <span>Payment mode <b>{mode}</b></span>
             <span>Balance after payment <b>{money(balance)}</b></span>
           </div>
-          <button className="action-button full-action" type="button">Save vendor payment</button>
+          {message && <p className="db-message">{message}</p>}
+          <button className="action-button full-action" type="button" onClick={submitPayment}>Save vendor payment</button>
         </Panel>
         <Panel title="Vendor ledger" subtitle="Pending balance">
           <DataTable
             columns={["Vendor", "Category", "Pending"]}
-            rows={vendors.map((vendor) => [vendor.name, vendor.category, money(vendor.pending)])}
+            rows={vendorRows.map((vendor) => [vendor.name, vendor.category, money(vendor.pending)])}
           />
         </Panel>
       </section>
@@ -711,14 +1177,16 @@ function VendorPaymentPage() {
   );
 }
 
-function DailyVendorsPage() {
+function DailyVendorsPage({ vendorRows, materialRows }) {
+  const vendorOptions = vendorRows.length ? vendorRows : vendors.map(normalizeVendor);
+  const materialOptions = materialRows.length ? materialRows : materials.map(normalizeMaterial);
   const [records, setRecords] = useState(seededPurchases);
   const [dateFilter, setDateFilter] = useState(today());
   const [form, setForm] = useState({
     date: today(),
-    vendor: vendors[0].name,
-    material: materials[0].name,
-    category: "Packaging",
+    vendor: vendorOptions[0]?.name || "",
+    material: materialOptions[0]?.name || "",
+    category: materialOptions[0]?.category || "Packaging",
     qty: 1,
     unit: "pcs",
     rate: 38,
@@ -739,9 +1207,12 @@ function DailyVendorsPage() {
       <Panel title="Daily vendor" subtitle="Date wise purchase and payment">
         <form className="form-grid purchase-form" onSubmit={savePurchase}>
           <label>DATE<input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></label>
-          <label>VENDOR<select value={form.vendor} onChange={(event) => setForm({ ...form, vendor: event.target.value })}>{vendors.map((vendor) => <option key={vendor.name}>{vendor.name}</option>)}</select></label>
-          <label>RAW MATERIAL<select value={form.material} onChange={(event) => setForm({ ...form, material: event.target.value })}>{materials.map((item) => <option key={item.name}>{item.name}</option>)}</select></label>
-          <label>CATEGORY<select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}>{Array.from(new Set(vendors.map((vendor) => vendor.category))).map((item) => <option key={item}>{item}</option>)}</select></label>
+          <label>VENDOR<select value={form.vendor} onChange={(event) => setForm({ ...form, vendor: event.target.value })}>{vendorOptions.map((vendor) => <option key={vendor.id}>{vendor.name}</option>)}</select></label>
+          <label>RAW MATERIAL<select value={form.material} onChange={(event) => {
+            const selected = materialOptions.find((item) => item.name === event.target.value);
+            setForm({ ...form, material: event.target.value, category: selected?.category || form.category, unit: selected?.unit || form.unit, rate: selected?.rate || form.rate });
+          }}>{materialOptions.map((item) => <option key={item.id}>{item.name}</option>)}</select></label>
+          <label>CATEGORY<select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}>{Array.from(new Set(vendorOptions.map((vendor) => vendor.category))).map((item) => <option key={item}>{item}</option>)}</select></label>
           <label>QTY<input type="number" value={form.qty} onChange={(event) => setForm({ ...form, qty: event.target.value })} /></label>
           <label>UNIT<input value={form.unit} onChange={(event) => setForm({ ...form, unit: event.target.value })} /></label>
           <label>RATE<input type="number" value={form.rate} onChange={(event) => setForm({ ...form, rate: event.target.value })} /></label>
@@ -926,9 +1397,22 @@ function EmployeesPage({ staff, status, onSaveEmployee }) {
 }
 
 function AttendancePage({ staff }) {
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    setSelectedIds(staff.map((employee) => employee.id));
+  }, [staff]);
+
+  function toggleEmployee(employeeId) {
+    setSelectedIds((ids) =>
+      ids.includes(employeeId) ? ids.filter((id) => id !== employeeId) : [...ids, employeeId]
+    );
+  }
+
   return (
     <Page>
-      <Panel title="Attendance" subtitle="Batch update attendance" action="Clear all">
+      <Panel title="Attendance" subtitle="Batch update attendance" action="Clear all" onAction={() => setSelectedIds([])}>
         <div className="form-grid">
           <label>DATE<input type="date" defaultValue={today()} /></label>
           <label>STATUS<select><option>Present</option><option>Absent</option><option>Half Day</option><option>Leave</option></select></label>
@@ -937,10 +1421,17 @@ function AttendancePage({ staff }) {
         </div>
         <div className="attendance-checks">
           {staff.map((employee) => (
-            <label key={employee.id}><input type="checkbox" /> <span>{employee.name}</span><small>{employee.role}</small></label>
+            <label key={employee.id}>
+              <input type="checkbox" checked={selectedIds.includes(employee.id)} onChange={() => toggleEmployee(employee.id)} />
+              <span>{employee.name}</span>
+              <small>{employee.role}</small>
+            </label>
           ))}
         </div>
-        <button className="action-button full" type="button">Update {staff.length} employee</button>
+        {message && <p className="db-message">{message}</p>}
+        <button className="action-button full" type="button" onClick={() => setMessage(`Attendance updated for ${selectedIds.length} employee`)}>
+          Update {selectedIds.length} employee
+        </button>
       </Panel>
       <Panel title="Filter wise" subtitle="Attendance report">
         <DataTable columns={["Date", "Employee", "Status", "In", "Out"]} rows={[]} empty="No attendance for selected filter" />
@@ -949,27 +1440,61 @@ function AttendancePage({ staff }) {
   );
 }
 
-function VendorsPage() {
+function VendorsPage({ vendorRows, onSaveVendor }) {
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ name: "", category: "Dairy", contact: "" });
+  const [message, setMessage] = useState("");
+
+  async function submitVendor(event) {
+    event.preventDefault();
+    const result = await onSaveVendor(form);
+    setMessage(result.source === "live" ? "Vendor saved in live DB" : "Vendor saved locally");
+    setForm({ name: "", category: "Dairy", contact: "" });
+    setShowForm(false);
+  }
+
   return (
     <Page>
-      <Panel title="Vendor management" subtitle="Vendor categories and contacts" action="Add vendor">
+      <Panel title="Vendor management" subtitle="Vendor categories and contacts" action="Add vendor" onAction={() => setShowForm(true)}>
+        {message && <p className="db-message">{message}</p>}
         <DataTable
-          columns={["Vendor", "Category", "Payment cycle", "Pending"]}
-          rows={vendors.map((vendor) => [vendor.name, vendor.category, vendor.cycle, money(vendor.pending)])}
+          columns={["Vendor", "Category", "Contact", "Pending"]}
+          rows={vendorRows.map((vendor) => [vendor.name, vendor.category, vendor.contact, money(vendor.pending)])}
         />
       </Panel>
+      {showForm && (
+        <Modal title="Add vendor" eyebrow="Vendor record" onClose={() => setShowForm(false)}>
+          <form className="modal-form grid-form" onSubmit={submitVendor}>
+            <label className="field"><span>Vendor name</span><input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
+            <label className="field"><span>Category</span><input value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} /></label>
+            <label className="field full"><span>Contact</span><input value={form.contact} onChange={(event) => setForm({ ...form, contact: event.target.value })} /></label>
+            <button className="action-button full" type="submit">Save vendor</button>
+          </form>
+        </Modal>
+      )}
     </Page>
   );
 }
 
-function ExpensesPage() {
+function ExpensesPage({ expenseRows, onSaveExpense }) {
   const [dateFilter, setDateFilter] = useState("");
-  const filtered = seededExpenses.filter((expense) => !dateFilter || expense.date === dateFilter);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ expenseDate: today(), label: "", category: "Staff Food", mode: "Cash", amount: 0 });
+  const [message, setMessage] = useState("");
+  const filtered = expenseRows.filter((expense) => !dateFilter || expense.date === dateFilter);
   const total = filtered.reduce((sum, expense) => sum + expense.amount, 0);
+
+  async function submitExpense(event) {
+    event.preventDefault();
+    const result = await onSaveExpense(form);
+    setMessage(result.source === "live" ? "Expense saved in live DB" : "Expense saved locally");
+    setForm({ expenseDate: today(), label: "", category: "Staff Food", mode: "Cash", amount: 0 });
+    setShowForm(false);
+  }
 
   return (
     <Page>
-      <Panel title="Expense management" subtitle="Daily shop expenses" action="Add expense">
+      <Panel title="Expense management" subtitle="Daily shop expenses" action="Add expense" onAction={() => setShowForm(true)}>
         <div className="filter-row">
           <label>
             DATE SEARCH
@@ -977,21 +1502,47 @@ function ExpensesPage() {
           </label>
           <strong className="total-chip">{money(total)}</strong>
         </div>
+        {message && <p className="db-message">{message}</p>}
         <DataTable
           columns={["Date", "Expense", "Category", "Mode", "Amount", "Action"]}
           rows={filtered.map((expense) => [expense.date, expense.title, expense.category, expense.mode, money(expense.amount), "Edit"])}
         />
       </Panel>
+      {showForm && (
+        <Modal title="Add expense" eyebrow="Expense record" onClose={() => setShowForm(false)}>
+          <form className="modal-form grid-form" onSubmit={submitExpense}>
+            <label className="field"><span>Expense</span><input required value={form.label} onChange={(event) => setForm({ ...form, label: event.target.value })} /></label>
+            <label className="field"><span>Date</span><input type="date" value={form.expenseDate} onChange={(event) => setForm({ ...form, expenseDate: event.target.value })} /></label>
+            <label className="field"><span>Category</span><input value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} /></label>
+            <label className="field"><span>Mode</span><select value={form.mode} onChange={(event) => setForm({ ...form, mode: event.target.value })}><option>Cash</option><option>UPI</option><option>Bank</option></select></label>
+            <label className="field full"><span>Amount</span><input type="number" value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value })} /></label>
+            <button className="action-button full" type="submit">Save expense</button>
+          </form>
+        </Modal>
+      )}
     </Page>
   );
 }
 
-function CategoriesPage() {
+function CategoriesPage({ categoryRows, onSaveCategory }) {
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ type: "Product", name: "", items: 0, margin: "New" });
+  const [message, setMessage] = useState("");
+
+  async function submitCategory(event) {
+    event.preventDefault();
+    const result = await onSaveCategory(form);
+    setMessage(result.source === "live" ? "Category saved in live DB" : "Category saved locally");
+    setForm({ type: "Product", name: "", items: 0, margin: "New" });
+    setShowForm(false);
+  }
+
   return (
     <Page>
-      <Panel title="Category management" subtitle="Product and vendor categories" action="Add category">
+      <Panel title="Category management" subtitle="Product and vendor categories" action="Add category" onAction={() => setShowForm(true)}>
+        {message && <p className="db-message">{message}</p>}
         <div className="category-grid">
-          {categories.map((category) => (
+          {categoryRows.map((category) => (
             <article key={`${category.type}-${category.name}`}>
               <span>{category.type.toUpperCase()}</span>
               <strong>{category.name}</strong>
@@ -1000,19 +1551,42 @@ function CategoriesPage() {
           ))}
         </div>
       </Panel>
+      {showForm && (
+        <Modal title="Add category" eyebrow="Category record" onClose={() => setShowForm(false)}>
+          <form className="modal-form grid-form" onSubmit={submitCategory}>
+            <label className="field"><span>Type</span><select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}><option>Product</option><option>Vendor</option><option>Expense</option></select></label>
+            <label className="field"><span>Name</span><input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
+            <label className="field"><span>Items</span><input type="number" value={form.items} onChange={(event) => setForm({ ...form, items: event.target.value })} /></label>
+            <label className="field"><span>Margin / note</span><input value={form.margin} onChange={(event) => setForm({ ...form, margin: event.target.value })} /></label>
+            <button className="action-button full" type="submit">Save category</button>
+          </form>
+        </Modal>
+      )}
     </Page>
   );
 }
 
-function UsersPage() {
+function UsersPage({ userRows, onSaveUser }) {
   const modules = navGroups.flatMap((group) => group.items.map((item) => item.label));
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ username: "", password: "", name: "", role: "accountant", status: "Active" });
+  const [message, setMessage] = useState("");
+
+  async function submitUser(event) {
+    event.preventDefault();
+    const result = await onSaveUser(form);
+    setMessage(result.source === "live" ? "User saved in live DB" : "User saved locally");
+    setForm({ username: "", password: "", name: "", role: "accountant", status: "Active" });
+    setShowForm(false);
+  }
 
   return (
     <Page>
-      <Panel title="User management" subtitle="ERP users and roles" action="Create user">
+      <Panel title="User management" subtitle="ERP users and roles" action="Create user" onAction={() => setShowForm(true)}>
+        {message && <p className="db-message">{message}</p>}
         <DataTable
           columns={["User", "Name", "Role", "Status", "Action"]}
-          rows={users.map((user) => [user.username, user.name, user.role, user.status, user.protected ? "Protected" : "Delete"])}
+          rows={userRows.map((user) => [user.username, user.name, user.role, user.status, user.protected ? "Protected" : "Delete"])}
         />
       </Panel>
       <Panel title="Access control" subtitle="Role permissions">
@@ -1021,6 +1595,18 @@ function UsersPage() {
           rows={modules.map((module) => [module, "✓", "✓", "✓", module === "Users" ? "-" : "✓"])}
         />
       </Panel>
+      {showForm && (
+        <Modal title="Create user" eyebrow="User record" onClose={() => setShowForm(false)}>
+          <form className="modal-form grid-form" onSubmit={submitUser}>
+            <label className="field"><span>Username</span><input required value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} /></label>
+            <label className="field"><span>Full name</span><input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
+            <label className="field"><span>Password</span><input required type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
+            <label className="field"><span>Role</span><select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}><option value="admin">Admin</option><option value="accountant">Accountant</option></select></label>
+            <label className="field full"><span>Status</span><select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}><option>Active</option><option>Inactive</option></select></label>
+            <button className="action-button full" type="submit">Save user</button>
+          </form>
+        </Modal>
+      )}
     </Page>
   );
 }
@@ -1030,6 +1616,8 @@ function Page({ children }) {
 }
 
 function Panel({ title, subtitle, action, secondAction, onAction, onSecondAction, children }) {
+  const showPlusIcon = action && /^(Add|Create|New)/.test(action);
+
   return (
     <section className="panel">
       <div className="panel-header">
@@ -1040,7 +1628,7 @@ function Panel({ title, subtitle, action, secondAction, onAction, onSecondAction
         <div className="panel-actions">
           {action && (
             <button className="action-button" type="button" onClick={onAction}>
-              <Plus size={16} />
+              {showPlusIcon && <Plus size={16} />}
               {action}
             </button>
           )}
@@ -1056,13 +1644,13 @@ function Panel({ title, subtitle, action, secondAction, onAction, onSecondAction
   );
 }
 
-function Modal({ title, onClose, children }) {
+function Modal({ title, eyebrow = "Record", onClose, children }) {
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title">
         <div className="modal-header">
           <div>
-            <span className="eyebrow">Employee record</span>
+            <span className="eyebrow">{eyebrow}</span>
             <h2 id="modal-title">{title}</h2>
           </div>
           <button className="icon-button quiet" type="button" onClick={onClose} aria-label="Close">
