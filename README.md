@@ -1,26 +1,15 @@
-# Chatru ERP
+# Chatru Halwai ERP
 
-Fresh rebuild of the Chatru ERP front end.
+Fresh rebuild of the Chatru Halwai ERP front end.
 
 ## Included
 
-- Login and session persistence
-- Centralized RBAC permissions
-- Protected ERP shell
-- Finance dashboard
-- Operations dashboard
-- Employees, inventory, vendors, sales, expenses, categories, and users modules
-- Search, status filters, CSV export, and add-record modal
-- LocalStorage-backed demo data
-
-## Demo Accounts
-
-| Role | Email | Password |
-| --- | --- | --- |
-| Admin | admin@chatru.com | admin123 |
-| Finance Manager | finance@chatru.com | finance123 |
-| Operations Manager | ops@chatru.com | ops123 |
-| Staff | staff@chatru.com | staff123 |
+- Chatru Halwai cream/gold theme with dark sidebar
+- Login: `admin` / `admin123`
+- Operations and finance dashboards
+- Sales Slip with bill preview and browser DB-backed bill history
+- Inventory, Vendor Payment, Daily Vendors, Employees, Attendance, Vendors, Expenses, Categories, and Users
+- Shop workflow navigation excludes the manufacturing tab
 
 ## Local Development
 
@@ -29,7 +18,7 @@ pnpm install
 pnpm dev
 ```
 
-## Production Build
+## Build
 
 ```bash
 pnpm build
