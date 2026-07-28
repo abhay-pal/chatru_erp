@@ -384,7 +384,7 @@ select:focus {
 }
 
 .employee-grid {
-  align-items: start;
+  align-items: stretch;
   grid-template-columns: minmax(420px, 0.88fr) minmax(520px, 1.12fr);
 }
 
@@ -1057,6 +1057,8 @@ td {
 }
 
 .employee-list {
+  flex: 1;
+  min-height: 0;
   max-height: calc(100vh - 270px);
   overflow: auto;
   padding-right: 4px;
@@ -1143,8 +1145,14 @@ td {
   color: var(--red);
 }
 
+.employee-list-panel,
 .employee-detail-panel {
   min-height: 620px;
+}
+
+.employee-list-panel {
+  display: flex;
+  flex-direction: column;
 }
 
 .employee-detail-top {
@@ -1494,6 +1502,11 @@ td {
 
   .employee-card-actions {
     margin-left: 0;
+  }
+
+  .employee-list-panel,
+  .employee-detail-panel {
+    min-height: auto;
   }
 
   .employee-fields div {
