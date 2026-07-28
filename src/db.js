@@ -1,18 +1,22 @@
 const DB_NAME = "chatru-halwai-erp-db";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const SALES_STORE = "sales_bills";
-const FALLBACK_KEY = "chatru-halwai-sales-bills";
+const EMPLOYEE_STORE = "employees";
+const SALES_FALLBACK_KEY = "chatru-halwai-sales-bills";
+const EMPLOYEE_FALLBACK_KEY = "chatru-halwai-employees";
+const LIVE_API_BASE = import.meta.env.VITE_CHATRU_API_BASE || "https://chatru.chatruhalwai.online";
+const LIVE_USER_ID = import.meta.env.VITE_CHATRU_USER_ID || "1";
 
-function fallbackRead() {
+function fallbackRead(key) {
   try {
-    return JSON.parse(localStorage.getItem(FALLBACK_KEY) || "[]");
+    return JSON.parse(localStorage.getItem(key) || "[]");
   } catch {
     return [];
   }
 }
 
-function fallbackWrite(records) {
-  localStorage.setItem(FALLBACK_KEY, JSON.stringify(records));
+function fallbackWrite(key, records) {
+  localStorage.setItem(key, JSON.stringify(records));
 }
 
 function openDb() {
@@ -30,6 +34,10 @@ function openDb() {
         const store = db.createObjectStore(SALES_STORE, { keyPath: "billNo" });
         store.createIndex("date", "date", { unique: false });
       }
+      if (!db.objectStoreNames.contains(EMPLOYEE_STORE)) {
+        const store = db.createObjectStore(EMPLOYEE_STORE, { keyPath: "id" });
+        store.createIndex("name", "name", { unique: false });
+      }
     };
 
     request.onsuccess = () => resolve(request.result);
@@ -45,33 +53,194 @@ function completeTransaction(transaction) {
   });
 }
 
-export async function listSalesBills() {
+function requestToPromise(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function listLocal(storeName, fallbackKey) {
   try {
     const db = await openDb();
-    const transaction = db.transaction(SALES_STORE, "readonly");
-    const request = transaction.objectStore(SALES_STORE).getAll();
-    const records = await new Promise((resolve, reject) => {
-      request.onsuccess = () => resolve(request.result || []);
-      request.onerror = () => reject(request.error);
-    });
+    const transaction = db.transaction(storeName, "readonly");
+    const records = await requestToPromise(transaction.objectStore(storeName).getAll());
     db.close();
-    return records.sort((a, b) => `${b.date}${b.billNo}`.localeCompare(`${a.date}${a.billNo}`));
+    return records || [];
   } catch {
-    return fallbackRead();
+    return fallbackRead(fallbackKey);
+  }
+}
+
+async function putLocal(storeName, fallbackKey, record, keyName) {
+  try {
+    const db = await openDb();
+    const transaction = db.transaction(storeName, "readwrite");
+    transaction.objectStore(storeName).put(record);
+    await completeTransaction(transaction);
+    db.close();
+  } catch {
+    const keyValue = record[keyName];
+    const records = fallbackRead(fallbackKey).filter((item) => item[keyName] !== keyValue);
+    fallbackWrite(fallbackKey, [record, ...records]);
+  }
+}
+
+async function replaceLocal(storeName, fallbackKey, records) {
+  try {
+    const db = await openDb();
+    const transaction = db.transaction(storeName, "readwrite");
+    const store = transaction.objectStore(storeName);
+    store.clear();
+    records.forEach((record) => store.put(record));
+    await completeTransaction(transaction);
+    db.close();
+  } catch {
+    fallbackWrite(fallbackKey, records);
+  }
+}
+
+async function apiRequest(path, { method = "GET", body } = {}) {
+  const headers = {
+    "Content-Type": "application/json",
+    "x-user-id": String(LIVE_USER_ID),
+  };
+  const response = await fetch(`${LIVE_API_BASE}${path}`, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+
+  if (!response.ok) {
+    throw new Error(data?.detail || data?.message || `API returned ${response.status}`);
+  }
+
+  return data;
+}
+
+function sortSales(records) {
+  return records.sort((a, b) => `${b.date}${b.billNo}`.localeCompare(`${a.date}${a.billNo}`));
+}
+
+function normalizeSalesRecord(record) {
+  const itemText = typeof record.items === "string" ? record.items : "";
+  return {
+    billNo: record.billNo || `SALE-${record.id}`,
+    date: record.saleDate || record.date,
+    mode: record.paymentMode || record.mode || "Cash",
+    items: Array.isArray(record.items)
+      ? record.items
+      : itemText
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean)
+          .map((product) => ({ product })),
+    subtotal: Number(record.subtotal || 0),
+    discount: Number(record.discount || 0),
+    tax: Number(record.tax || 0),
+    total: Number(record.total || 0),
+    createdAt: record.saleDateTime || record.createdAt || new Date().toISOString(),
+  };
+}
+
+function toSalesPayload(bill, products) {
+  const items = bill.items
+    .map((item) => {
+      const product = products.find((entry) => entry.name === item.product);
+      return product ? { productId: product.id, qty: Number(item.qty || 0) } : null;
+    })
+    .filter(Boolean);
+
+  if (!items.length) {
+    throw new Error("No matching live products found");
+  }
+
+  return {
+    items,
+    discount: Number(bill.discount || 0),
+    taxEnabled: Number(bill.tax || 0) > 0,
+    paymentMode: bill.mode || "Cash",
+  };
+}
+
+function toEmployeePayload(employee) {
+  return {
+    name: employee.name,
+    role: employee.role,
+    phone: employee.phone || (employee.contact === "-" ? "" : employee.contact) || "",
+    address: employee.address === "-" ? "" : employee.address || "",
+    aadhaarCard: employee.aadhaarCard || (employee.aadhaar === "-" ? "" : employee.aadhaar) || "",
+    joiningDate: employee.joiningDate || employee.joining,
+    salary: Number(employee.salary || 0),
+    shiftStart: employee.shiftStart || "09:00:00",
+    shiftEnd: employee.shiftEnd || "21:00:00",
+  };
+}
+
+export async function listSalesBills() {
+  try {
+    const bootstrap = await apiRequest("/api/bootstrap");
+    const records = (bootstrap.salesHistory || []).map(normalizeSalesRecord);
+    await replaceLocal(SALES_STORE, SALES_FALLBACK_KEY, records);
+    return sortSales(records);
+  } catch {
+    return sortSales(await listLocal(SALES_STORE, SALES_FALLBACK_KEY));
   }
 }
 
 export async function saveSalesBill(bill) {
   try {
-    const db = await openDb();
-    const transaction = db.transaction(SALES_STORE, "readwrite");
-    transaction.objectStore(SALES_STORE).put(bill);
-    await completeTransaction(transaction);
-    db.close();
-    return bill;
+    const bootstrap = await apiRequest("/api/bootstrap");
+    const payload = toSalesPayload(bill, bootstrap.products || []);
+    const result = await apiRequest("/api/sales-slips", { method: "POST", body: payload });
+    const records = (result.bootstrap?.salesHistory || []).map(normalizeSalesRecord);
+    if (records.length) {
+      await replaceLocal(SALES_STORE, SALES_FALLBACK_KEY, records);
+    } else {
+      await putLocal(SALES_STORE, SALES_FALLBACK_KEY, bill, "billNo");
+    }
+    return { record: bill, source: "live" };
   } catch {
-    const records = fallbackRead().filter((record) => record.billNo !== bill.billNo);
-    fallbackWrite([bill, ...records]);
-    return bill;
+    await putLocal(SALES_STORE, SALES_FALLBACK_KEY, bill, "billNo");
+    return { record: bill, source: "local" };
+  }
+}
+
+export async function listEmployees(seedEmployees = []) {
+  try {
+    const bootstrap = await apiRequest("/api/bootstrap");
+    const records = bootstrap.employees || [];
+    await replaceLocal(EMPLOYEE_STORE, EMPLOYEE_FALLBACK_KEY, records);
+    return records;
+  } catch {
+    const localRecords = await listLocal(EMPLOYEE_STORE, EMPLOYEE_FALLBACK_KEY);
+    if (localRecords.length) {
+      return localRecords;
+    }
+    await replaceLocal(EMPLOYEE_STORE, EMPLOYEE_FALLBACK_KEY, seedEmployees);
+    return seedEmployees;
+  }
+}
+
+export async function saveEmployee(employee) {
+  try {
+    const result = await apiRequest("/api/employees", {
+      method: "POST",
+      body: toEmployeePayload(employee),
+    });
+    const record = result.employee || result.record || result;
+    const records = result.bootstrap?.employees || [];
+    if (records.length) {
+      await replaceLocal(EMPLOYEE_STORE, EMPLOYEE_FALLBACK_KEY, records);
+    } else {
+      await putLocal(EMPLOYEE_STORE, EMPLOYEE_FALLBACK_KEY, record, "id");
+    }
+    return { record, source: "live" };
+  } catch {
+    const record = employee.id ? employee : { ...employee, id: `EMP-${Date.now()}` };
+    await putLocal(EMPLOYEE_STORE, EMPLOYEE_FALLBACK_KEY, record, "id");
+    return { record, source: "local" };
   }
 }

@@ -33,7 +33,7 @@ import {
   users,
   vendors,
 } from "./data";
-import { listSalesBills, saveSalesBill } from "./db";
+import { listEmployees, listSalesBills, saveEmployee, saveSalesBill } from "./db";
 
 const SESSION_KEY = "chatru-halwai-session";
 const today = () => new Date().toISOString().slice(0, 10);
@@ -57,6 +57,48 @@ function money(value) {
   return `₹${Math.round(value || 0).toLocaleString("en-IN")}`;
 }
 
+function normalizeEmployee(employee, index = 0) {
+  const id = employee.id || employee.employeeCode || `EMP-${String(index + 1).padStart(3, "0")}`;
+  const contact = employee.contact ?? employee.phone ?? "-";
+  const aadhaar = employee.aadhaar ?? employee.aadhaarCard ?? "-";
+  const joining = employee.joining ?? employee.joiningDate ?? today();
+
+  return {
+    ...employee,
+    id: String(id),
+    employeeCode: employee.employeeCode || String(id),
+    name: employee.name || "Unnamed employee",
+    role: employee.role || "Staff",
+    salary: Number(employee.salary || 0),
+    contact: contact || "-",
+    phone: employee.phone || (contact === "-" ? "" : contact),
+    joining,
+    joiningDate: employee.joiningDate || joining,
+    address: employee.address || "-",
+    aadhaar: aadhaar || "-",
+    aadhaarCard: employee.aadhaarCard || (aadhaar === "-" ? "" : aadhaar),
+    status: employee.status || "Absent",
+  };
+}
+
+function normalizeStaff(records) {
+  return records.map(normalizeEmployee).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function blankEmployeeForm() {
+  return {
+    name: "",
+    role: "Karigar",
+    contact: "",
+    address: "",
+    aadhaar: "",
+    joining: today(),
+    salary: "",
+    shiftStart: "09:00:00",
+    shiftEnd: "21:00:00",
+  };
+}
+
 function useClock() {
   const [clock, setClock] = useState(new Date());
   useEffect(() => {
@@ -77,11 +119,17 @@ export default function App() {
   const [route, setRoute] = useState("operations");
   const [salesBills, setSalesBills] = useState([]);
   const [salesStatus, setSalesStatus] = useState("Loading DB");
+  const [staff, setStaff] = useState(() => normalizeStaff(employees));
+  const [employeeStatus, setEmployeeStatus] = useState("Loading DB");
 
   useEffect(() => {
     listSalesBills().then((records) => {
       setSalesBills(records);
-      setSalesStatus("DB live");
+      setSalesStatus("Live DB connected");
+    });
+    listEmployees(employees).then((records) => {
+      setStaff(normalizeStaff(records));
+      setEmployeeStatus("Live DB connected");
     });
   }, []);
 
@@ -105,10 +153,29 @@ export default function App() {
   }
 
   async function persistBill(bill) {
-    await saveSalesBill(bill);
-    const records = await listSalesBills();
-    setSalesBills(records);
-    setSalesStatus("Saved in DB");
+    const result = await saveSalesBill(bill);
+    if (result.source === "live") {
+      const records = await listSalesBills();
+      setSalesBills(records);
+    } else {
+      setSalesBills((records) => [bill, ...records.filter((record) => record.billNo !== bill.billNo)]);
+    }
+    setSalesStatus(result.source === "live" ? "Saved in live DB" : "Saved in local DB");
+    return result;
+  }
+
+  async function persistEmployee(employee) {
+    const result = await saveEmployee(employee);
+    if (result.source === "live") {
+      const records = await listEmployees([result.record, ...staff]);
+      setStaff(normalizeStaff(records));
+    } else {
+      setStaff((records) =>
+        normalizeStaff([result.record, ...records.filter((record) => record.id !== result.record.id)])
+      );
+    }
+    setEmployeeStatus(result.source === "live" ? "Employee saved in live DB" : "Employee saved in local DB");
+    return result;
   }
 
   if (!session) {
@@ -119,9 +186,12 @@ export default function App() {
     <Shell user={session} route={route} onRoute={setRoute} onLogout={logout}>
       <RouteView
         route={route}
+        staff={staff}
+        employeeStatus={employeeStatus}
         salesBills={salesBills}
         salesStatus={salesStatus}
         onSaveBill={persistBill}
+        onSaveEmployee={persistEmployee}
       />
     </Shell>
   );
@@ -140,7 +210,7 @@ function LoginPage({ onLogin }) {
   return (
     <main className="login-screen">
       <form className="login-card" onSubmit={submit}>
-        <div className="sweet-logo">CH</div>
+        <img className="brand-logo" src="/chatru-logo.png" alt="Chatru Halwai logo" />
         <h1>CHATRU HALWAI ERP</h1>
         <h2>Login</h2>
         <label>
@@ -175,8 +245,11 @@ function Shell({ user, route, onRoute, onLogout, children }) {
           <button className="icon-button close-button" type="button" onClick={() => setOpen(false)}>
             <X size={18} />
           </button>
-          <div className="brand-title">Chatru Halwai</div>
-          <div className="brand-subtitle">SWEETS & NAMKEEN ERP</div>
+          <img src="/chatru-logo.png" alt="Chatru Halwai logo" />
+          <div>
+            <div className="brand-title">Chatru Halwai</div>
+            <div className="brand-subtitle">SWEETS & NAMKEEN ERP</div>
+          </div>
         </div>
 
         <nav className="nav-stack">
@@ -217,6 +290,10 @@ function Shell({ user, route, onRoute, onLogout, children }) {
           <button className="icon-button menu-button" type="button" onClick={() => setOpen(true)}>
             <Menu size={19} />
           </button>
+          <div className="topbar-title">
+            <span>Admin workspace</span>
+            <h1>Chatru Halwai ERP</h1>
+          </div>
           <div className="search-pill">
             <Search size={17} />
             <input type="search" placeholder="Search bills, vendors, stock" />
@@ -244,17 +321,19 @@ function Shell({ user, route, onRoute, onLogout, children }) {
   );
 }
 
-function RouteView({ route, salesBills, salesStatus, onSaveBill }) {
-  if (route === "operations") return <OperationsDashboard salesBills={salesBills} />;
-  if (route === "finance") return <FinanceDashboard salesBills={salesBills} />;
+function RouteView({ route, staff, employeeStatus, salesBills, salesStatus, onSaveBill, onSaveEmployee }) {
+  if (route === "operations") return <OperationsDashboard salesBills={salesBills} staff={staff} />;
+  if (route === "finance") return <FinanceDashboard salesBills={salesBills} staff={staff} />;
   if (route === "sales-slip") {
     return <SalesSlipPage bills={salesBills} status={salesStatus} onSaveBill={onSaveBill} />;
   }
   if (route === "inventory") return <InventoryPage />;
   if (route === "vendor-payment") return <VendorPaymentPage />;
   if (route === "daily-vendors") return <DailyVendorsPage />;
-  if (route === "employees") return <EmployeesPage />;
-  if (route === "attendance") return <AttendancePage />;
+  if (route === "employees") {
+    return <EmployeesPage staff={staff} status={employeeStatus} onSaveEmployee={onSaveEmployee} />;
+  }
+  if (route === "attendance") return <AttendancePage staff={staff} />;
   if (route === "vendors") return <VendorsPage />;
   if (route === "expenses") return <ExpensesPage />;
   if (route === "categories") return <CategoriesPage />;
@@ -262,7 +341,7 @@ function RouteView({ route, salesBills, salesStatus, onSaveBill }) {
   return null;
 }
 
-function OperationsDashboard({ salesBills }) {
+function OperationsDashboard({ salesBills, staff }) {
   const todaysSales = totalForDate(salesBills, today());
   const totalExpenses = seededExpenses.reduce((sum, item) => sum + item.amount, 0);
   const vendorDues = vendors.reduce((sum, item) => sum + item.pending, 0);
@@ -273,7 +352,7 @@ function OperationsDashboard({ salesBills }) {
         items={[
           ["Today's sales", money(todaysSales), "Live"],
           ["Today's expenses", money(totalExpenses), "Live"],
-          ["Staff present", `0 / ${employees.length}`, `${employees.length} absent`],
+          ["Staff present", `0 / ${staff.length}`, `${staff.length} absent`],
           ["Vendor dues", money(vendorDues), `${vendors.length} vendors`],
         ]}
       />
@@ -311,18 +390,18 @@ function OperationsDashboard({ salesBills }) {
       <Panel title="Attendance" subtitle="Staff today">
         <DataTable
           columns={["Name", "Role", "Status"]}
-          rows={employees.map((employee) => [employee.name, employee.role, "Absent"])}
+          rows={staff.map((employee) => [employee.name, employee.role, employee.status || "Absent"])}
         />
       </Panel>
     </Page>
   );
 }
 
-function FinanceDashboard({ salesBills }) {
+function FinanceDashboard({ salesBills, staff }) {
   const monthSales = salesBills.reduce((sum, bill) => sum + bill.total, 0);
   const totalExpenses = seededExpenses.reduce((sum, item) => sum + item.amount, 0);
   const purchases = seededPurchases.reduce((sum, item) => sum + item.qty * item.rate, 0);
-  const salary = employees.reduce((sum, item) => sum + item.salary, 0);
+  const salary = staff.reduce((sum, item) => sum + item.salary, 0);
   const vendorDues = vendors.reduce((sum, item) => sum + item.pending, 0);
 
   return (
@@ -395,13 +474,17 @@ function SalesSlipPage({ bills, status, onSaveBill }) {
   const total = Math.max(0, subtotal - Number(discount || 0) + tax);
   const filteredBills = bills.filter((bill) => !historyDate || bill.date === historyDate);
 
+  useEffect(() => {
+    setMessage(status);
+  }, [status]);
+
   function updateItem(index, patch) {
     setItems(items.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
   }
 
   async function saveBill() {
     const billNo = `${date}-${String(bills.length + 1).padStart(2, "0")}`;
-    await onSaveBill({
+    const result = await onSaveBill({
       billNo,
       date,
       mode,
@@ -412,7 +495,7 @@ function SalesSlipPage({ bills, status, onSaveBill }) {
       total,
       createdAt: new Date().toISOString(),
     });
-    setMessage(`Bill ${billNo} saved in DB`);
+    setMessage(`Bill ${billNo} ${result.source === "live" ? "saved in live DB" : "saved in local DB"}`);
   }
 
   return (
@@ -488,6 +571,7 @@ function SalesSlipPage({ bills, status, onSaveBill }) {
 
         <Panel title="Thermal slip" subtitle="Print preview">
           <div className="thermal-slip">
+            <img className="slip-logo" src="/chatru-logo.png" alt="Chatru Halwai logo" />
             <h3>Chatru Halwai & Sons</h3>
             <p>Sweets & Namkeen - Muzaffarnagar</p>
             <p>Bill: {date}-{String(bills.length + 1).padStart(2, "0")}</p>
@@ -684,21 +768,75 @@ function DailyVendorsPage() {
   );
 }
 
-function EmployeesPage() {
+function EmployeesPage({ staff, status, onSaveEmployee }) {
   const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState(employees[0].id);
+  const [selectedId, setSelectedId] = useState(staff[0]?.id || "");
   const [tab, setTab] = useState("Salary");
-  const selected = employees.find((employee) => employee.id === selectedId) || employees[0];
-  const filtered = employees.filter((employee) => employee.name.toLowerCase().includes(query.toLowerCase()));
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState(() => blankEmployeeForm());
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState(status);
+  const selected = staff.find((employee) => employee.id === selectedId) || staff[0];
+  const filtered = staff.filter((employee) => employee.name.toLowerCase().includes(query.toLowerCase()));
+
+  useEffect(() => {
+    if (!selectedId || !staff.some((employee) => employee.id === selectedId)) {
+      setSelectedId(staff[0]?.id || "");
+    }
+  }, [selectedId, staff]);
+
+  useEffect(() => {
+    setMessage(status);
+  }, [status]);
+
+  function openEmployeeForm() {
+    setForm(blankEmployeeForm());
+    setShowForm(true);
+  }
+
+  function updateForm(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  async function submitEmployee(event) {
+    event.preventDefault();
+    setSaving(true);
+    const employee = normalizeEmployee({
+      ...form,
+      id: `EMP-${Date.now()}`,
+      salary: Number(form.salary || 0),
+      contact: form.contact || "-",
+      aadhaar: form.aadhaar || "-",
+      address: form.address || "-",
+      joining: form.joining || today(),
+    });
+    const result = await onSaveEmployee(employee);
+    const saved = normalizeEmployee(result.record, staff.length);
+    setSelectedId(saved.id);
+    setMessage(result.source === "live" ? "Employee saved in live DB" : "Employee saved in local DB");
+    setSaving(false);
+    setShowForm(false);
+  }
+
+  if (!selected) {
+    return (
+      <Page>
+        <Panel title="Employee management" subtitle="Profiles and salary" action="Add employee" onAction={openEmployeeForm}>
+          <div className="empty-state">No employees found</div>
+        </Panel>
+      </Page>
+    );
+  }
 
   return (
     <Page>
       <section className="grid employee-grid">
-        <Panel title="Employee management" subtitle="Profiles and salary" action="Add employee">
+        <Panel title="Employee management" subtitle="Profiles and salary" action="Add employee" onAction={openEmployeeForm}>
           <label className="inline-search">
             <Search size={17} />
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search name" />
           </label>
+          <p className="db-message">{message}</p>
           <div className="employee-list">
             {filtered.map((employee) => (
               <button className={employee.id === selectedId ? "selected" : ""} type="button" key={employee.id} onClick={() => setSelectedId(employee.id)}>
@@ -746,11 +884,48 @@ function EmployeesPage() {
           )}
         </Panel>
       </section>
+      {showForm && (
+        <Modal title="Add employee" onClose={() => setShowForm(false)}>
+          <form className="modal-form grid-form" onSubmit={submitEmployee}>
+            <label className="field">
+              <span>Name</span>
+              <input required value={form.name} onChange={(event) => updateForm("name", event.target.value)} />
+            </label>
+            <label className="field">
+              <span>Role</span>
+              <input value={form.role} onChange={(event) => updateForm("role", event.target.value)} />
+            </label>
+            <label className="field">
+              <span>Contact</span>
+              <input value={form.contact} onChange={(event) => updateForm("contact", event.target.value)} />
+            </label>
+            <label className="field">
+              <span>Aadhaar</span>
+              <input value={form.aadhaar} onChange={(event) => updateForm("aadhaar", event.target.value)} />
+            </label>
+            <label className="field">
+              <span>Joining date</span>
+              <input type="date" value={form.joining} onChange={(event) => updateForm("joining", event.target.value)} />
+            </label>
+            <label className="field">
+              <span>Monthly salary</span>
+              <input min="0" type="number" value={form.salary} onChange={(event) => updateForm("salary", event.target.value)} />
+            </label>
+            <label className="field full">
+              <span>Address</span>
+              <input value={form.address} onChange={(event) => updateForm("address", event.target.value)} />
+            </label>
+            <button className="action-button full" type="submit" disabled={saving}>
+              {saving ? "Saving..." : "Save employee"}
+            </button>
+          </form>
+        </Modal>
+      )}
     </Page>
   );
 }
 
-function AttendancePage() {
+function AttendancePage({ staff }) {
   return (
     <Page>
       <Panel title="Attendance" subtitle="Batch update attendance" action="Clear all">
@@ -761,11 +936,11 @@ function AttendancePage() {
           <label>CHECK OUT<input type="time" /></label>
         </div>
         <div className="attendance-checks">
-          {employees.map((employee) => (
+          {staff.map((employee) => (
             <label key={employee.id}><input type="checkbox" /> <span>{employee.name}</span><small>{employee.role}</small></label>
           ))}
         </div>
-        <button className="action-button full" type="button">Update {employees.length} employee</button>
+        <button className="action-button full" type="button">Update {staff.length} employee</button>
       </Panel>
       <Panel title="Filter wise" subtitle="Attendance report">
         <DataTable columns={["Date", "Employee", "Status", "In", "Out"]} rows={[]} empty="No attendance for selected filter" />
@@ -854,7 +1029,7 @@ function Page({ children }) {
   return <div className="page-stack">{children}</div>;
 }
 
-function Panel({ title, subtitle, action, secondAction, children }) {
+function Panel({ title, subtitle, action, secondAction, onAction, onSecondAction, children }) {
   return (
     <section className="panel">
       <div className="panel-header">
@@ -863,12 +1038,40 @@ function Panel({ title, subtitle, action, secondAction, children }) {
           <h2>{subtitle}</h2>
         </div>
         <div className="panel-actions">
-          {action && <button className="action-button" type="button">{action}</button>}
-          {secondAction && <button className="action-button dark" type="button">{secondAction}</button>}
+          {action && (
+            <button className="action-button" type="button" onClick={onAction}>
+              <Plus size={16} />
+              {action}
+            </button>
+          )}
+          {secondAction && (
+            <button className="action-button dark" type="button" onClick={onSecondAction}>
+              {secondAction}
+            </button>
+          )}
         </div>
       </div>
       {children}
     </section>
+  );
+}
+
+function Modal({ title, onClose, children }) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <div className="modal-header">
+          <div>
+            <span className="eyebrow">Employee record</span>
+            <h2 id="modal-title">{title}</h2>
+          </div>
+          <button className="icon-button quiet" type="button" onClick={onClose} aria-label="Close">
+            <X size={18} />
+          </button>
+        </div>
+        {children}
+      </section>
+    </div>
   );
 }
 

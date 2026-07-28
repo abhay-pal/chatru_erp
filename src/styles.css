@@ -22,10 +22,7 @@
 body {
   margin: 0;
   min-width: 320px;
-  background:
-    linear-gradient(135deg, rgba(255, 176, 46, 0.2), transparent 34%),
-    radial-gradient(circle at 88% 12%, rgba(255, 127, 17, 0.12), transparent 28%),
-    var(--cream);
+  background: #050505;
   color: var(--ink);
 }
 
@@ -44,6 +41,7 @@ button {
   display: grid;
   place-items: center;
   padding: 22px;
+  background: linear-gradient(180deg, #050505, #17100b);
 }
 
 .login-card {
@@ -57,15 +55,14 @@ button {
   gap: 16px;
 }
 
-.sweet-logo {
-  width: 62px;
-  height: 62px;
-  border-radius: 8px;
-  display: grid;
-  place-items: center;
-  background: var(--gold);
-  color: var(--dark);
-  font-weight: 950;
+.brand-logo,
+.login-card img {
+  width: 70px;
+  height: 70px;
+  object-fit: contain;
+  background: #000;
+  border: 2px solid #ff7f11;
+  border-radius: 50%;
 }
 
 .login-card h1,
@@ -117,26 +114,41 @@ select:focus {
 .erp-shell {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 282px minmax(0, 1fr);
+  grid-template-columns: 292px minmax(0, 1fr);
+  background: #050505;
 }
 
 .sidebar {
   position: sticky;
   top: 0;
   height: 100vh;
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.88), rgba(0, 0, 0, 0.94)), var(--dark);
+  background: rgba(0, 0, 0, 0.84);
   color: white;
   border-right: 1px solid rgba(255, 255, 255, 0.09);
-  padding: 18px;
+  padding: 24px 18px;
   display: flex;
   flex-direction: column;
   gap: 18px;
+  overflow-y: auto;
 }
 
 .brand-block {
   border-bottom: 1px solid rgba(255, 255, 255, 0.09);
   padding-bottom: 16px;
   position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-block img {
+  width: 54px;
+  height: 54px;
+  object-fit: contain;
+  background: #000;
+  border: 2px solid #ff7f11;
+  border-radius: 50%;
+  flex: 0 0 auto;
 }
 
 .brand-title {
@@ -223,29 +235,53 @@ select:focus {
 
 .workspace {
   min-width: 0;
+  padding: 26px 34px;
+  background: linear-gradient(180deg, rgba(255, 127, 17, 0.08), transparent 280px), #050505;
 }
 
 .topbar {
-  min-height: 74px;
-  padding: 14px 24px;
+  min-height: 68px;
+  padding: 0 0 24px;
   display: flex;
   align-items: center;
   gap: 14px;
-  background: rgba(255, 250, 243, 0.9);
-  border-bottom: 1px solid var(--line);
-  backdrop-filter: blur(14px);
+  color: white;
+  background: transparent;
+  border-bottom: 0;
   position: sticky;
   top: 0;
   z-index: 10;
 }
 
+.topbar-title {
+  min-width: 230px;
+}
+
+.topbar-title span,
+.eyebrow {
+  display: block;
+  color: rgba(255, 176, 46, 0.88);
+  font-size: 0.76rem;
+  font-weight: 950;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.topbar-title h1 {
+  margin: 2px 0 0;
+  color: white;
+  font-size: clamp(1.65rem, 3vw, 2.15rem);
+  line-height: 1;
+  letter-spacing: 0;
+}
+
 .search-pill {
   flex: 1;
-  max-width: 480px;
+  max-width: 430px;
   display: flex;
   align-items: center;
   gap: 9px;
-  background: #fffdf8;
+  background: #fffaf3;
   border: 1px solid rgba(120, 78, 32, 0.14);
   border-radius: 8px;
   padding: 0 12px;
@@ -272,11 +308,12 @@ select:focus {
 }
 
 .user-chip strong {
+  color: white;
   font-size: 0.88rem;
 }
 
 .user-chip span {
-  color: var(--muted);
+  color: rgba(255, 255, 255, 0.62);
   font-size: 0.76rem;
   font-weight: 800;
 }
@@ -295,7 +332,7 @@ select:focus {
 }
 
 .content {
-  padding: 24px;
+  padding: 0;
 }
 
 .page-stack {
@@ -409,6 +446,11 @@ select:focus {
   background: var(--gold);
   color: var(--dark);
   padding: 0 14px;
+}
+
+.action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
 }
 
 .action-button.dark {
@@ -647,6 +689,17 @@ td {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+.slip-logo {
+  width: 58px;
+  height: 58px;
+  object-fit: contain;
+  display: block;
+  margin: 0 auto 8px;
+  background: #000;
+  border: 2px solid #ff7f11;
+  border-radius: 50%;
+}
+
 .thermal-slip h3,
 .thermal-slip p {
   text-align: center;
@@ -797,6 +850,68 @@ td {
   color: var(--muted);
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.68);
+  padding: 18px;
+}
+
+.modal-panel {
+  width: min(720px, 100%);
+  max-height: min(720px, calc(100vh - 36px));
+  overflow: auto;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.38);
+  padding: 18px;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.modal-header .eyebrow {
+  color: #b76912;
+}
+
+.modal-header h2 {
+  margin: 3px 0 0;
+  font-size: 1.35rem;
+}
+
+.modal-form {
+  display: grid;
+  gap: 12px;
+}
+
+.grid-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.field {
+  display: grid;
+  gap: 7px;
+}
+
+.field.full {
+  grid-column: 1 / -1;
+}
+
+.field span {
+  color: #6a5540;
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
 @media (max-width: 1120px) {
   .erp-shell {
     display: block;
@@ -842,6 +957,15 @@ td {
     padding: 12px;
   }
 
+  .workspace {
+    padding: 0;
+  }
+
+  .topbar-title {
+    min-width: 0;
+    flex: 1;
+  }
+
   .search-pill {
     order: 3;
     max-width: none;
@@ -863,7 +987,8 @@ td {
 
   .metrics,
   .metrics.compact,
-  .purchase-form {
+  .purchase-form,
+  .grid-form {
     grid-template-columns: 1fr;
   }
 
