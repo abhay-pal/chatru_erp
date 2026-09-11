@@ -15,12 +15,34 @@ Fresh rebuild of the Chatru Halwai ERP front end.
 ## Local Development
 
 ```bash
-pnpm install
-pnpm dev
+npm install
+npm run dev
 ```
 
 ## Build
 
 ```bash
-pnpm build
+npm run build
 ```
+
+## Hostinger Deployment
+
+Use the Node.js deployment for `chatruhalwai.online`.
+
+- Install command: `npm install`
+- Build command: `npm run build`
+- Start command: `npm start`
+- Root directory: `./`
+- Output directory: `dist`
+
+Set these environment variables in Hostinger before redeploying:
+
+```bash
+DB_HOST=localhost
+DB_PORT=3306
+DB_NAME=u755553180_chatru_erp
+DB_USER=u755553180_chatru_erp
+DB_PASSWORD=your_mysql_password
+```
+
+The server creates the required MySQL tables automatically on first start. It does not insert demo business data. `PORT` is optional for local testing; Hostinger can provide it automatically.

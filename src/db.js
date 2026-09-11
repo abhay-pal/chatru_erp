@@ -4,7 +4,7 @@ const SALES_STORE = "sales_bills";
 const EMPLOYEE_STORE = "employees";
 const SALES_FALLBACK_KEY = "chatru-halwai-sales-bills";
 const EMPLOYEE_FALLBACK_KEY = "chatru-halwai-employees";
-const LIVE_API_BASE = import.meta.env.VITE_CHATRU_API_BASE || "https://chatru.chatruhalwai.online";
+const LIVE_API_BASE = import.meta.env.VITE_CHATRU_API_BASE || "";
 const LIVE_USER_ID = import.meta.env.VITE_CHATRU_USER_ID || "1";
 
 function fallbackRead(key) {
@@ -177,6 +177,8 @@ function toSalesPayload(bill, products) {
   }
 
   return {
+    billNo: bill.billNo,
+    saleDate: bill.date,
     items,
     discount: Number(bill.discount || 0),
     taxEnabled: Number(bill.tax || 0) > 0,

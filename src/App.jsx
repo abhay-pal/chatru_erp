@@ -506,22 +506,35 @@ export default function App() {
     return { ...result, id: String(materialId) };
   }
 
-  function updateMaterialStock(materialId, patch) {
-    setMaterialRows((records) =>
-      records.map((record) =>
-        record.id === String(materialId)
-          ? normalizeMaterial({
-              ...record,
-              ...patch,
-              stock: Number(patch.stock ?? record.stock),
-              inToday: Number(patch.inToday ?? record.inToday),
-              outToday: Number(patch.outToday ?? record.outToday),
-              wastage: Number(patch.wastage ?? record.wastage),
-            })
-          : record
-      )
-    );
-    return { source: "local" };
+  async function updateMaterialStock(materialId, patch) {
+    const current = materialRows.find((record) => record.id === String(materialId));
+    if (!current) return { source: "local" };
+    const record = normalizeMaterial({
+      ...current,
+      ...patch,
+      stock: Number(patch.stock ?? current.stock),
+      inToday: Number(patch.inToday ?? current.inToday),
+      outToday: Number(patch.outToday ?? current.outToday),
+      wastage: Number(patch.wastage ?? current.wastage),
+    });
+    const payload = {
+      name: record.name,
+      category: record.category,
+      stock: record.stock,
+      unit: record.unit,
+      min: record.min,
+      rate: record.rate,
+      inToday: record.inToday,
+      outToday: record.outToday,
+      wastage: record.wastage,
+    };
+    const result = await updateBusinessRecord(`/api/raw-stock/${record.id}`, payload);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setMaterialRows((records) => records.map((item) => (item.id === record.id ? record : item)));
+    }
+    return { ...result, record };
   }
 
   async function persistProduct(product) {
@@ -1803,7 +1816,7 @@ function InventoryPage({
     setMessage("Product deleted");
   }
 
-  function submitStock(event) {
+  async function submitStock(event) {
     event.preventDefault();
     const selected = materialRows.find((material) => material.id === stockForm.id);
     const nextStock =
@@ -1811,7 +1824,7 @@ function InventoryPage({
       Number(stockForm.inToday || 0) -
       Number(stockForm.outToday || 0) -
       Number(stockForm.wastage || 0);
-    onUpdateMaterialStock(stockForm.id, { ...stockForm, stock: Math.max(0, nextStock) });
+    await onUpdateMaterialStock(stockForm.id, { ...stockForm, stock: Math.max(0, nextStock) });
     setMessage(`${selected?.name || "Stock"} updated`);
     setModalMode(null);
   }
