@@ -41,11 +41,13 @@ import {
 } from "./data";
 import {
   createBusinessRecord,
+  deleteBusinessRecord,
   listEmployees,
   listSalesBills,
   loadBusinessData,
   saveEmployee,
   saveSalesBill,
+  updateBusinessRecord,
 } from "./db";
 
 const SESSION_KEY = "chatru-halwai-session";
@@ -325,15 +327,33 @@ export default function App() {
     return result;
   }
 
-  function updateMaterial(material) {
+  async function updateMaterial(material) {
     const record = normalizeMaterial(material);
-    setMaterialRows((records) => records.map((item) => (item.id === record.id ? record : item)));
-    return { record, source: "local" };
+    const payload = {
+      name: record.name,
+      category: record.category,
+      stock: record.stock,
+      unit: record.unit,
+      min: record.min,
+      rate: record.rate,
+    };
+    const result = await updateBusinessRecord(`/api/raw-stock/${record.id}`, payload);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setMaterialRows((records) => records.map((item) => (item.id === record.id ? record : item)));
+    }
+    return result;
   }
 
-  function deleteMaterial(materialId) {
-    setMaterialRows((records) => records.filter((item) => item.id !== String(materialId)));
-    return { id: String(materialId), source: "local" };
+  async function deleteMaterial(materialId) {
+    const result = await deleteBusinessRecord(`/api/raw-stock/${materialId}`);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setMaterialRows((records) => records.filter((item) => item.id !== String(materialId)));
+    }
+    return { ...result, id: String(materialId) };
   }
 
   function updateMaterialStock(materialId, patch) {
@@ -389,15 +409,30 @@ export default function App() {
     return result;
   }
 
-  function updateVendor(vendor) {
+  async function updateVendor(vendor) {
     const record = normalizeVendor(vendor);
-    setVendorRows((records) => records.map((item) => (item.id === record.id ? record : item)));
-    return { record, source: "local" };
+    const payload = {
+      name: record.name,
+      category: record.category,
+      contact: record.contact === "-" ? "" : record.contact,
+    };
+    const result = await updateBusinessRecord(`/api/vendors/${record.id}`, payload);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setVendorRows((records) => records.map((item) => (item.id === record.id ? record : item)));
+    }
+    return result;
   }
 
-  function deleteVendor(vendorId) {
-    setVendorRows((records) => records.filter((item) => item.id !== String(vendorId)));
-    return { id: String(vendorId), source: "local" };
+  async function deleteVendor(vendorId) {
+    const result = await deleteBusinessRecord(`/api/vendors/${vendorId}`);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setVendorRows((records) => records.filter((item) => item.id !== String(vendorId)));
+    }
+    return { ...result, id: String(vendorId) };
   }
 
   async function persistVendorPayment(payment) {
@@ -434,15 +469,32 @@ export default function App() {
     return result;
   }
 
-  function updateExpense(expense) {
+  async function updateExpense(expense) {
     const record = normalizeExpense(expense);
-    setExpenseRows((records) => records.map((item) => (item.id === record.id ? record : item)));
-    return { record, source: "local" };
+    const payload = {
+      expenseDate: record.expenseDate,
+      label: record.label,
+      category: record.category,
+      amount: record.amount,
+      mode: record.mode,
+    };
+    const result = await updateBusinessRecord(`/api/expenses/${record.id}`, payload);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setExpenseRows((records) => records.map((item) => (item.id === record.id ? record : item)));
+    }
+    return result;
   }
 
-  function deleteExpense(expenseId) {
-    setExpenseRows((records) => records.filter((item) => item.id !== String(expenseId)));
-    return { id: String(expenseId), source: "local" };
+  async function deleteExpense(expenseId) {
+    const result = await deleteBusinessRecord(`/api/expenses/${expenseId}`);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setExpenseRows((records) => records.filter((item) => item.id !== String(expenseId)));
+    }
+    return { ...result, id: String(expenseId) };
   }
 
   async function persistCategory(category) {
@@ -462,15 +514,31 @@ export default function App() {
     return result;
   }
 
-  function updateCategory(category) {
+  async function updateCategory(category) {
     const record = normalizeCategory(category);
-    setCategoryRows((records) => records.map((item) => (item.id === record.id ? record : item)));
-    return { record, source: "local" };
+    const payload = {
+      type: record.type,
+      name: record.name,
+      items: record.items,
+      margin: record.margin,
+    };
+    const result = await updateBusinessRecord(`/api/categories/${record.id}`, payload);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setCategoryRows((records) => records.map((item) => (item.id === record.id ? record : item)));
+    }
+    return result;
   }
 
-  function deleteCategory(categoryId) {
-    setCategoryRows((records) => records.filter((item) => item.id !== String(categoryId)));
-    return { id: String(categoryId), source: "local" };
+  async function deleteCategory(categoryId) {
+    const result = await deleteBusinessRecord(`/api/categories/${categoryId}`);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setCategoryRows((records) => records.filter((item) => item.id !== String(categoryId)));
+    }
+    return { ...result, id: String(categoryId) };
   }
 
   async function persistUser(user) {
@@ -1277,15 +1345,15 @@ function InventoryPage({
 
   async function submitMaterial(event) {
     event.preventDefault();
-    const result = materialForm.id ? onUpdateMaterial(materialForm) : await onSaveMaterial(materialForm);
+    const result = await (materialForm.id ? onUpdateMaterial(materialForm) : onSaveMaterial(materialForm));
     setMaterialForm({ name: "", category: "Packaging", stock: 0, unit: "kg", min: 0, rate: 0 });
     setMessage(materialForm.id ? "Raw material updated" : "Raw material saved");
     setModalMode(null);
   }
 
-  function removeMaterial(material) {
+  async function removeMaterial(material) {
     if (!window.confirm(`Delete ${material.name}?`)) return;
-    onDeleteMaterial(material.id);
+    await onDeleteMaterial(material.id);
     setMessage("Raw material deleted");
   }
 
@@ -2079,15 +2147,15 @@ function VendorsPage({ vendorRows, onSaveVendor, onUpdateVendor, onDeleteVendor 
 
   async function submitVendor(event) {
     event.preventDefault();
-    const result = form.id ? onUpdateVendor(form) : await onSaveVendor(form);
+    const result = await (form.id ? onUpdateVendor(form) : onSaveVendor(form));
     setMessage(form.id ? "Vendor updated" : "Vendor saved");
     setForm({ name: "", category: "Dairy", contact: "" });
     setShowForm(false);
   }
 
-  function removeVendor(vendor) {
+  async function removeVendor(vendor) {
     if (!window.confirm(`Delete ${vendor.name}?`)) return;
-    onDeleteVendor(vendor.id);
+    await onDeleteVendor(vendor.id);
     setMessage("Vendor deleted");
   }
 
@@ -2142,15 +2210,15 @@ function ExpensesPage({ expenseRows, onSaveExpense, onUpdateExpense, onDeleteExp
 
   async function submitExpense(event) {
     event.preventDefault();
-    const result = form.id ? onUpdateExpense(form) : await onSaveExpense(form);
+    const result = await (form.id ? onUpdateExpense(form) : onSaveExpense(form));
     setMessage(form.id ? "Expense updated" : "Expense saved");
     setForm({ expenseDate: today(), label: "", category: "Staff Food", mode: "Cash", amount: 0 });
     setShowForm(false);
   }
 
-  function removeExpense(expense) {
+  async function removeExpense(expense) {
     if (!window.confirm(`Delete ${expense.title}?`)) return;
-    onDeleteExpense(expense.id);
+    await onDeleteExpense(expense.id);
     setMessage("Expense deleted");
   }
 
@@ -2260,7 +2328,7 @@ function CategoriesPage({
 
   async function submitCategory(event) {
     event.preventDefault();
-    const result = categoryForm.id ? onUpdateCategory(categoryForm) : await onSaveCategory(categoryForm);
+    const result = await (categoryForm.id ? onUpdateCategory(categoryForm) : onSaveCategory(categoryForm));
     setMessage(categoryForm.id ? "Category updated" : "Category saved");
     setCategoryForm({ type: "Product", name: "" });
     setShowCategoryForm(false);
@@ -2268,7 +2336,7 @@ function CategoriesPage({
 
   async function submitMaterial(event) {
     event.preventDefault();
-    const result = materialForm.id ? onUpdateMaterial(materialForm) : await onSaveMaterial(materialForm);
+    const result = await (materialForm.id ? onUpdateMaterial(materialForm) : onSaveMaterial(materialForm));
     setMessage(
       materialForm.id
         ? "Raw material updated. It is now available in Daily Vendors."
@@ -2286,15 +2354,15 @@ function CategoriesPage({
     setActiveTab("materials");
   }
 
-  function removeCategory(category) {
+  async function removeCategory(category) {
     if (!window.confirm(`Delete ${category.name}?`)) return;
-    onDeleteCategory(category.id);
+    await onDeleteCategory(category.id);
     setMessage("Category deleted");
   }
 
-  function removeMaterial(material) {
+  async function removeMaterial(material) {
     if (!window.confirm(`Delete ${material.name}?`)) return;
-    onDeleteMaterial(material.id);
+    await onDeleteMaterial(material.id);
     setMessage("Raw material deleted");
   }
 

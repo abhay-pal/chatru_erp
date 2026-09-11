@@ -192,6 +192,24 @@ export async function createBusinessRecord(path, record) {
   }
 }
 
+export async function updateBusinessRecord(path, record) {
+  try {
+    const result = await apiRequest(path, { method: "PUT", body: record });
+    return { record: result.record || result.item || result, bootstrap: result.bootstrap, source: "live" };
+  } catch {
+    return { record, bootstrap: null, source: "local" };
+  }
+}
+
+export async function deleteBusinessRecord(path) {
+  try {
+    const result = await apiRequest(path, { method: "DELETE" });
+    return { record: result?.record || result?.item || result, bootstrap: result?.bootstrap, source: "live" };
+  } catch {
+    return { record: null, bootstrap: null, source: "local" };
+  }
+}
+
 export async function listSalesBills() {
   try {
     const bootstrap = await apiRequest("/api/bootstrap");
