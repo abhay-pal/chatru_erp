@@ -563,6 +563,15 @@ select:focus {
   width: 100%;
 }
 
+.button-row.full {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+
+.button-row.full .action-button {
+  flex: 1;
+}
+
 .ghost-button {
   padding: 0 13px;
   background: var(--gold-soft);
@@ -583,6 +592,36 @@ select:focus {
 
 .icon-button.quiet {
   background: #f3eadb;
+}
+
+.icon-button.danger {
+  background: #fff0e8;
+  color: #a23816;
+}
+
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.row-action {
+  width: 34px;
+  min-width: 34px;
+  min-height: 34px;
+}
+
+.cell-with-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 220px;
+}
+
+.cell-with-actions > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .close-button,
