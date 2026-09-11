@@ -252,42 +252,55 @@ function purchasePending(purchase) {
   return Math.max(0, Number(purchase.pending ?? amount - paid));
 }
 
-function applyPaymentsToPurchases(purchases, payments) {
-  const paymentTotals = new Map();
+function paymentPurchaseIds(payment) {
+  const match = String(payment.notes || "").match(/purchases?:\s*([a-z0-9,\s-]+)/i);
+  return match ? match[1].split(/[\s,]+/).filter(Boolean).map(String) : [];
+}
+
+function applyPaymentAmountToPurchase(purchase, paymentAmount) {
+  const applied = Math.min(purchase.pending, Number(paymentAmount || 0));
+  return {
+    ...purchase,
+    paid: Number(purchase.paid || 0) + applied,
+    pending: Math.max(0, Number(purchase.pending || 0) - applied),
+  };
+}
+
+function resolvePurchaseBalances(purchases, payments = []) {
+  const resolved = purchases.map((purchase) => ({
+    ...purchase,
+    amount: purchaseAmount(purchase),
+    paid: Number(purchase.paid || 0),
+    pending: purchasePending(purchase),
+  }));
+  const byId = new Map(resolved.map((purchase) => [String(purchase.id), purchase]));
+
   payments.forEach((payment) => {
-    const key = vendorKey(payment);
-    paymentTotals.set(key, (paymentTotals.get(key) || 0) + Number(payment.amount || 0));
+    let remaining = Number(payment.amount || 0);
+    paymentPurchaseIds(payment).forEach((purchaseId) => {
+      const purchase = byId.get(String(purchaseId));
+      if (!purchase || remaining <= 0) return;
+      const nextPurchase = applyPaymentAmountToPurchase(purchase, remaining);
+      remaining -= purchase.pending - nextPurchase.pending;
+      Object.assign(purchase, nextPurchase);
+    });
   });
 
-  const purchasesByVendor = purchases.reduce((groups, purchase) => {
-    const key = vendorKey(purchase);
-    const group = groups.get(key) || [];
-    group.push(purchase);
-    groups.set(key, group);
-    return groups;
-  }, new Map());
+  payments
+    .filter((payment) => /^Payment for \d+ pending purchase/i.test(String(payment.notes || "")))
+    .forEach((payment) => {
+      const pendingMatch = resolved.find(
+        (purchase) =>
+          purchase.pending === Number(payment.amount || 0) &&
+          vendorKey(purchase) === vendorKey(payment) &&
+          purchase.date <= payment.paymentDate
+      );
+      if (pendingMatch) {
+        Object.assign(pendingMatch, applyPaymentAmountToPurchase(pendingMatch, payment.amount));
+      }
+    });
 
-  const resolved = new Map();
-  purchasesByVendor.forEach((items, key) => {
-    let remainingPayments = paymentTotals.get(key) || 0;
-    [...items]
-      .sort((a, b) => `${a.date}${a.id}`.localeCompare(`${b.date}${b.id}`))
-      .forEach((purchase) => {
-        const amount = purchaseAmount(purchase);
-        const directPaid = Number(purchase.paid || 0);
-        const basePending = Math.max(0, amount - directPaid);
-        const allocatedPayment = Math.min(basePending, remainingPayments);
-        remainingPayments -= allocatedPayment;
-        resolved.set(purchase.id, {
-          ...purchase,
-          amount,
-          paid: directPaid + allocatedPayment,
-          pending: Math.max(0, basePending - allocatedPayment),
-        });
-      });
-  });
-
-  return purchases.map((purchase) => resolved.get(purchase.id) || purchase);
+  return resolved;
 }
 
 function applyDynamicVendorBalances(vendors, purchases, payments) {
@@ -634,6 +647,29 @@ export default function App() {
     };
   }
 
+  async function recordPurchasePayment(purchase, paidAmount = Number(purchase.paid || 0)) {
+    if (Number(paidAmount || 0) <= 0) return null;
+    const selectedVendor =
+      vendorRows.find((vendor) => vendor.id === purchase.vendorId) ||
+      vendorRows.find((vendor) => vendor.name === purchase.vendor);
+    const paymentRecord = normalizeVendorPayment({
+      id: `PAY-${Date.now()}`,
+      vendorId: selectedVendor?.id || purchase.vendorId,
+      vendorName: purchase.vendor,
+      paymentDate: purchase.date,
+      amount: paidAmount,
+      mode: purchase.mode,
+      notes: `Paid with daily vendor entry - ${purchase.material}`,
+    });
+    const result = await createBusinessRecord("/api/vendor-payments", toVendorPaymentPayload(paymentRecord));
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setVendorPaymentRows((records) => [paymentRecord, ...records]);
+    }
+    return { ...result, record: paymentRecord };
+  }
+
   async function updateVendorPayment(payment) {
     const record = normalizeVendorPayment(payment);
     const result = await updateBusinessRecord(`/api/vendor-payments/${record.id}`, toVendorPaymentPayload(record));
@@ -684,16 +720,23 @@ export default function App() {
     } else {
       setVendorPurchaseRows((records) => [record, ...records]);
     }
+    await recordPurchasePayment(record);
     return { ...result, record };
   }
 
-  async function updateVendorPurchase(purchase) {
+  async function updateVendorPurchase(purchase, options = {}) {
+    const existing = vendorPurchaseRows.find((item) => item.id === String(purchase.id));
+    const previousPaid = existing ? Number(existing.paid || 0) : 0;
     const record = normalizeVendorPurchase(purchase);
     const result = await updateBusinessRecord(`/api/vendor-purchases/${record.id}`, toVendorPurchasePayload(record));
     if (result.bootstrap) {
       applyBusinessData(result.bootstrap);
     } else {
       setVendorPurchaseRows((records) => records.map((item) => (item.id === record.id ? record : item)));
+    }
+    const paidDelta = Math.max(0, Number(record.paid || 0) - previousPaid);
+    if (!options.skipPaymentRecord) {
+      await recordPurchasePayment(record, paidDelta);
     }
     return { ...result, record };
   }
@@ -845,7 +888,7 @@ export default function App() {
   }
 
   const dynamicVendorPurchaseRows = useMemo(
-    () => applyPaymentsToPurchases(vendorPurchaseRows, vendorPaymentRows),
+    () => resolvePurchaseBalances(vendorPurchaseRows, vendorPaymentRows),
     [vendorPurchaseRows, vendorPaymentRows]
   );
   const dynamicVendorRows = useMemo(
@@ -1140,6 +1183,7 @@ function RouteView({
         onSaveVendorPayment={onSaveVendorPayment}
         onUpdateVendorPayment={onUpdateVendorPayment}
         onDeleteVendorPayment={onDeleteVendorPayment}
+        onUpdatePurchase={onUpdateVendorPurchase}
       />
     );
   }
@@ -1870,6 +1914,7 @@ function VendorPaymentPage({
   onSaveVendorPayment,
   onUpdateVendorPayment,
   onDeleteVendorPayment,
+  onUpdatePurchase,
 }) {
   const [vendorId, setVendorId] = useState(vendorRows[3]?.id || vendorRows[0]?.id || "");
   const [amount, setAmount] = useState(0);
@@ -1943,6 +1988,43 @@ function VendorPaymentPage({
     setSelectedDueIds((ids) => ids.filter((id) => availableIds.has(id)));
   }, [pendingEntries]);
 
+  function purchasePaymentNote(entries) {
+    return `Payment for purchases: ${entries.map((entry) => entry.id).join(", ")}`;
+  }
+
+  function paymentNoteWithEntries(customNote, entries) {
+    const entryNote = purchasePaymentNote(entries);
+    return customNote ? `${customNote} | ${entryNote}` : entryNote;
+  }
+
+  function buildPaymentPlan(entries, paymentAmount) {
+    let remaining = Number(paymentAmount || 0);
+    const plan = [];
+    [...entries]
+      .sort((a, b) => `${a.date}${a.id}`.localeCompare(`${b.date}${b.id}`))
+      .forEach((entry) => {
+        if (remaining <= 0) return;
+        const applied = Math.min(entry.pending, remaining);
+        remaining -= applied;
+        if (applied > 0) {
+          plan.push({ entry, applied });
+        }
+      });
+    return plan;
+  }
+
+  async function applyPaymentToPurchaseEntries(entries, paymentAmount) {
+    if (!onUpdatePurchase) return;
+    const plan = buildPaymentPlan(entries, paymentAmount);
+    for (const { entry, applied } of plan) {
+      await onUpdatePurchase({
+        ...entry,
+        paid: Number(entry.paid || 0) + applied,
+        pending: Math.max(0, Number(entry.pending || 0) - applied),
+      }, { skipPaymentRecord: true });
+    }
+  }
+
   async function submitPayment() {
     if (!selected?.id && !selectedDueEntries.length) return;
     if (selectedDueEntries.length) {
@@ -1967,21 +2049,30 @@ function VendorPaymentPage({
           amount: group.amount,
           mode,
           paymentDate,
-          notes: notes || `Payment for ${group.entries.length} pending purchase${group.entries.length === 1 ? "" : "s"}`,
+          notes: paymentNoteWithEntries(notes, group.entries),
         });
       }
+      await applyPaymentToPurchaseEntries(selectedDueEntries, selectedPendingTotal);
       cancelPaymentEdit();
       setMessage(`${selectedDueEntries.length} pending entr${selectedDueEntries.length === 1 ? "y" : "ies"} paid`);
       return;
     }
 
+    const paymentAmount = Number(amount || 0);
+    if (paymentAmount <= 0) {
+      setMessage("Enter payment amount");
+      return;
+    }
+
+    const vendorPendingEntries = pendingEntries.filter((entry) => entry.vendorId === selected.id || entry.vendor === selected.name);
+    const paymentPlan = buildPaymentPlan(vendorPendingEntries, paymentAmount);
     const payment = {
       vendorId: selected.id,
       vendorName: selected.name,
-      amount: Number(amount || 0),
+      amount: paymentAmount,
       mode,
       paymentDate,
-      notes,
+      notes: paymentPlan.length ? paymentNoteWithEntries(notes, paymentPlan.map(({ entry }) => entry)) : notes,
     };
     if (editingPaymentId) {
       await onUpdateVendorPayment({ ...payment, id: editingPaymentId });
@@ -1989,6 +2080,7 @@ function VendorPaymentPage({
       setEditingPaymentId("");
     } else {
       await onSaveVendorPayment(payment);
+      await applyPaymentToPurchaseEntries(vendorPendingEntries, paymentAmount);
       setMessage("Vendor payment saved");
     }
     setSelectedDueIds([]);
@@ -2020,7 +2112,7 @@ function VendorPaymentPage({
     setAmount(nextAmount);
     if (firstEntry) {
       setVendorId(firstVendor?.id || firstEntry.vendorId || "");
-      setNotes(`Payment for ${entries.length} pending purchase${entries.length === 1 ? "" : "s"}`);
+      setNotes(purchasePaymentNote(entries));
       setMessage(`${entries.length} pending entr${entries.length === 1 ? "y" : "ies"} selected`);
     } else {
       setNotes("");
@@ -2040,7 +2132,7 @@ function VendorPaymentPage({
     setVendorId(vendor?.id || entry.vendorId || "");
     setAmount(entry.pending);
     setPaymentDate(today());
-    setNotes(`Payment for ${entry.material} purchase on ${entry.date}`);
+    setNotes(purchasePaymentNote([entry]));
     setSelectedDueIds([entry.id]);
     setEditingPaymentId("");
     setMessage(`Selected pending entry: ${entry.vendor} - ${entry.material}`);
@@ -2448,15 +2540,17 @@ function DailyVendorsPage({
         <DataTable
           columns={["Date", "Vendor", "Item", "Qty", "Amount", "Paid", "Pending", "Action"]}
           rows={filtered.map((record) => {
-            const amount = Number(record.qty) * Number(record.rate);
+            const amount = purchaseAmount(record);
+            const pending = purchasePending(record);
+            const paid = Math.max(0, amount - pending);
             return [
               record.date,
               record.vendor,
               record.material,
               `${record.qty} ${record.unit}`,
               money(amount),
-              money(record.paid),
-              money(amount - record.paid),
+              money(paid),
+              money(pending),
               <RowActions
                 onEdit={() => editPurchase(record)}
                 onDelete={() => deletePurchase(record)}
@@ -2823,12 +2917,14 @@ function VendorsPage({ vendorRows, onSaveVendor, onUpdateVendor, onDeleteVendor 
       <Panel title="Vendor management" subtitle="Vendor categories and contacts" action="Add vendor" onAction={() => openVendorForm()}>
         {message && <p className="db-message">{message}</p>}
         <DataTable
-          columns={["Vendor", "Category", "Contact", "Pending", "Action"]}
+          columns={["Vendor", "Category", "Contact", "Purchases", "Pending", "Last paid", "Action"]}
           rows={vendorRows.map((vendor) => [
             vendor.name,
             vendor.category,
             vendor.contact,
+            money(vendor.purchases),
             money(vendor.pending),
+            money(vendor.lastPaid),
             <RowActions
               onEdit={() => openVendorForm(vendor)}
               onDelete={() => removeVendor(vendor)}

@@ -120,6 +120,25 @@ async function apiRequest(path, { method = "GET", body } = {}) {
   return data;
 }
 
+function businessRecordFromResult(result) {
+  return (
+    result?.record ||
+    result?.item ||
+    result?.employee ||
+    result?.product ||
+    result?.rawStock ||
+    result?.vendor ||
+    result?.vendorPurchase ||
+    result?.purchase ||
+    result?.vendorPayment ||
+    result?.payment ||
+    result?.expense ||
+    result?.category ||
+    result?.user ||
+    result
+  );
+}
+
 function sortSales(records) {
   return records.sort((a, b) => `${b.date}${b.billNo}`.localeCompare(`${a.date}${a.billNo}`));
 }
@@ -186,7 +205,7 @@ export async function loadBusinessData() {
 export async function createBusinessRecord(path, record) {
   try {
     const result = await apiRequest(path, { method: "POST", body: record });
-    return { record: result.record || result.item || result, bootstrap: result.bootstrap, source: "live" };
+    return { record: businessRecordFromResult(result), bootstrap: result.bootstrap, source: "live" };
   } catch {
     return { record, bootstrap: null, source: "local" };
   }
@@ -195,7 +214,7 @@ export async function createBusinessRecord(path, record) {
 export async function updateBusinessRecord(path, record) {
   try {
     const result = await apiRequest(path, { method: "PUT", body: record });
-    return { record: result.record || result.item || result, bootstrap: result.bootstrap, source: "live" };
+    return { record: businessRecordFromResult(result), bootstrap: result.bootstrap, source: "live" };
   } catch {
     return { record, bootstrap: null, source: "local" };
   }
@@ -204,7 +223,7 @@ export async function updateBusinessRecord(path, record) {
 export async function deleteBusinessRecord(path) {
   try {
     const result = await apiRequest(path, { method: "DELETE" });
-    return { record: result?.record || result?.item || result, bootstrap: result?.bootstrap, source: "live" };
+    return { record: businessRecordFromResult(result), bootstrap: result?.bootstrap, source: "live" };
   } catch {
     return { record: null, bootstrap: null, source: "local" };
   }
