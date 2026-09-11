@@ -1961,14 +1961,12 @@ function CategoriesPage({ categoryRows, materialRows, onSaveCategory, onSaveMate
             <label className="field"><span>Name</span><input required value={materialForm.name} onChange={(event) => setMaterialForm({ ...materialForm, name: event.target.value })} /></label>
             <label className="field">
               <span>Category</span>
-              <input
-                list="raw-material-category-options"
+              <select
                 value={materialForm.category}
                 onChange={(event) => setMaterialForm({ ...materialForm, category: event.target.value })}
-              />
-              <datalist id="raw-material-category-options">
-                {rawMaterialCategoryOptions.map((category) => <option key={category} value={category} />)}
-              </datalist>
+              >
+                {rawMaterialCategoryOptions.map((category) => <option key={category}>{category}</option>)}
+              </select>
             </label>
             <label className="field"><span>Stock</span><input type="number" value={materialForm.stock} onChange={(event) => setMaterialForm({ ...materialForm, stock: event.target.value })} /></label>
             <label className="field"><span>Unit</span><input value={materialForm.unit} onChange={(event) => setMaterialForm({ ...materialForm, unit: event.target.value })} /></label>
