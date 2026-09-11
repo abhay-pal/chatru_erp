@@ -275,3 +275,42 @@ export async function saveEmployee(employee) {
     return { record, source: "local" };
   }
 }
+
+export async function updateEmployeeRecord(employee) {
+  try {
+    const result = await apiRequest(`/api/employees/${employee.id}`, {
+      method: "PUT",
+      body: toEmployeePayload(employee),
+    });
+    const record = result.employee || result.record || result;
+    const records = result.bootstrap?.employees || [];
+    if (records.length) {
+      await replaceLocal(EMPLOYEE_STORE, EMPLOYEE_FALLBACK_KEY, records);
+    } else {
+      await putLocal(EMPLOYEE_STORE, EMPLOYEE_FALLBACK_KEY, record, "id");
+    }
+    return { record, source: "live", bootstrap: result.bootstrap };
+  } catch {
+    await putLocal(EMPLOYEE_STORE, EMPLOYEE_FALLBACK_KEY, employee, "id");
+    return { record: employee, source: "local" };
+  }
+}
+
+export async function deleteEmployeeRecord(employeeId) {
+  try {
+    const result = await apiRequest(`/api/employees/${employeeId}`, { method: "DELETE" });
+    const records = result.bootstrap?.employees || [];
+    if (records.length) {
+      await replaceLocal(EMPLOYEE_STORE, EMPLOYEE_FALLBACK_KEY, records);
+    }
+    return { id: String(employeeId), source: "live", bootstrap: result.bootstrap };
+  } catch {
+    const records = await listLocal(EMPLOYEE_STORE, EMPLOYEE_FALLBACK_KEY);
+    await replaceLocal(
+      EMPLOYEE_STORE,
+      EMPLOYEE_FALLBACK_KEY,
+      records.filter((employee) => String(employee.id) !== String(employeeId))
+    );
+    return { id: String(employeeId), source: "local" };
+  }
+}

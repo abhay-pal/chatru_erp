@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   BadgeIndianRupee,
   Bell,
@@ -29,15 +29,7 @@ import {
 } from "lucide-react";
 import {
   adminUser,
-  categories,
-  dailyPurchases as seededPurchases,
-  employees,
-  expenses as seededExpenses,
-  materials,
   navGroups,
-  products,
-  users,
-  vendors,
 } from "./data";
 import {
   createBusinessRecord,
@@ -45,8 +37,10 @@ import {
   listEmployees,
   listSalesBills,
   loadBusinessData,
+  deleteEmployeeRecord,
   saveEmployee,
   saveSalesBill,
+  updateEmployeeRecord,
   updateBusinessRecord,
 } from "./db";
 
@@ -54,6 +48,11 @@ const SESSION_KEY = "chatru-halwai-session";
 const appAsset = (path) => `${import.meta.env.BASE_URL || "/"}${path.replace(/^\/+/, "")}`;
 const CHATRU_LOGO_SRC = appAsset("chatru-logo.png");
 const today = () => new Date().toISOString().slice(0, 10);
+const monthStart = () => {
+  const date = new Date();
+  date.setDate(1);
+  return date.toISOString().slice(0, 10);
+};
 
 const iconMap = {
   BadgeIndianRupee,
@@ -162,6 +161,43 @@ function normalizeVendor(item, index = 0) {
   };
 }
 
+function normalizeVendorPurchase(item, index = 0) {
+  const qty = Number(item.qty || 0);
+  const rate = Number(item.rate || 0);
+  const paid = Number(item.paid || 0);
+  const amount = Number(item.amount ?? qty * rate);
+
+  return {
+    id: String(item.id || `PUR-${index + 1}`),
+    vendorId: item.vendorId ? String(item.vendorId) : "",
+    vendor: item.vendor || item.vendorName || "",
+    material: item.material || item.itemName || "",
+    category: item.category || "General",
+    date: item.date || item.purchaseDate || today(),
+    purchaseDate: item.purchaseDate || item.date || today(),
+    qty,
+    unit: item.unit || "kg",
+    rate,
+    amount,
+    paid,
+    pending: Number(item.pending ?? Math.max(0, amount - paid)),
+    mode: item.mode || "Cash",
+    notes: item.notes || "",
+  };
+}
+
+function normalizeVendorPayment(item, index = 0) {
+  return {
+    id: String(item.id || `PAY-${index + 1}`),
+    vendorId: item.vendorId ? String(item.vendorId) : "",
+    vendorName: item.vendorName || item.vendor || "",
+    paymentDate: item.paymentDate || item.date || today(),
+    amount: Number(item.amount || 0),
+    mode: item.mode || "Cash",
+    notes: item.notes || "",
+  };
+}
+
 function normalizeExpense(item, index = 0) {
   return {
     id: String(item.id || `EXP-${index + 1}`),
@@ -220,21 +256,23 @@ export default function App() {
   const [route, setRoute] = useState("operations");
   const [salesBills, setSalesBills] = useState([]);
   const [salesStatus, setSalesStatus] = useState("Ready");
-  const [staff, setStaff] = useState(() => normalizeStaff(employees));
+  const [staff, setStaff] = useState([]);
   const [employeeStatus, setEmployeeStatus] = useState("Ready");
-  const [materialRows, setMaterialRows] = useState(() => materials.map(normalizeMaterial));
-  const [productRows, setProductRows] = useState(() => products.map(normalizeProduct));
-  const [vendorRows, setVendorRows] = useState(() => vendors.map(normalizeVendor));
-  const [expenseRows, setExpenseRows] = useState(() => seededExpenses.map(normalizeExpense));
-  const [categoryRows, setCategoryRows] = useState(() => categories.map(normalizeCategory));
-  const [userRows, setUserRows] = useState(() => users.map(normalizeUser));
+  const [materialRows, setMaterialRows] = useState([]);
+  const [productRows, setProductRows] = useState([]);
+  const [vendorRows, setVendorRows] = useState([]);
+  const [vendorPurchaseRows, setVendorPurchaseRows] = useState([]);
+  const [vendorPaymentRows, setVendorPaymentRows] = useState([]);
+  const [expenseRows, setExpenseRows] = useState([]);
+  const [categoryRows, setCategoryRows] = useState([]);
+  const [userRows, setUserRows] = useState([]);
 
   useEffect(() => {
     listSalesBills().then((records) => {
       setSalesBills(records);
       setSalesStatus("Ready");
     });
-    listEmployees(employees).then((records) => {
+    listEmployees().then((records) => {
       setStaff(normalizeStaff(records));
       setEmployeeStatus("Ready");
     });
@@ -242,9 +280,12 @@ export default function App() {
   }, []);
 
   function applyBusinessData(data) {
+    if (data.employees) setStaff(normalizeStaff(data.employees));
     if (data.rawStock) setMaterialRows(data.rawStock.map(normalizeMaterial));
     if (data.products) setProductRows(data.products.map(normalizeProduct));
     if (data.vendors) setVendorRows(data.vendors.map(normalizeVendor));
+    if (data.vendorPurchases) setVendorPurchaseRows(data.vendorPurchases.map(normalizeVendorPurchase));
+    if (data.vendorPayments) setVendorPaymentRows(data.vendorPayments.map(normalizeVendorPayment));
     if (data.expenses) setExpenseRows(data.expenses.map(normalizeExpense));
     if (data.categories) setCategoryRows(data.categories.map(normalizeCategory));
     if (data.users) setUserRows(data.users.map(normalizeUser));
@@ -295,17 +336,27 @@ export default function App() {
     return result;
   }
 
-  function updateEmployee(employee) {
+  async function updateEmployee(employee) {
     const record = normalizeEmployee(employee);
-    setStaff((records) => normalizeStaff(records.map((item) => (item.id === record.id ? record : item))));
+    const result = await updateEmployeeRecord(record);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setStaff((records) => normalizeStaff(records.map((item) => (item.id === record.id ? record : item))));
+    }
     setEmployeeStatus("Employee updated");
-    return { record };
+    return { ...result, record: result.record || record };
   }
 
-  function deleteEmployee(employeeId) {
-    setStaff((records) => normalizeStaff(records.filter((item) => item.id !== String(employeeId))));
+  async function deleteEmployee(employeeId) {
+    const result = await deleteEmployeeRecord(employeeId);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setStaff((records) => normalizeStaff(records.filter((item) => item.id !== String(employeeId))));
+    }
     setEmployeeStatus("Employee removed");
-    return { id: String(employeeId) };
+    return { ...result, id: String(employeeId) };
   }
 
   async function persistMaterial(material) {
@@ -324,7 +375,7 @@ export default function App() {
     } else {
       setMaterialRows((records) => [record, ...records]);
     }
-    return result;
+    return { ...result, record };
   }
 
   async function updateMaterial(material) {
@@ -393,6 +444,35 @@ export default function App() {
     return result;
   }
 
+  async function updateProduct(product) {
+    const record = normalizeProduct(product);
+    const payload = {
+      sku: record.sku,
+      name: record.name,
+      category: record.category,
+      unit: record.unit,
+      rate: record.rate,
+      taxRate: record.taxRate,
+    };
+    const result = await updateBusinessRecord(`/api/products/${record.id}`, payload);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setProductRows((records) => records.map((item) => (item.id === record.id ? record : item)));
+    }
+    return result;
+  }
+
+  async function deleteProduct(productId) {
+    const result = await deleteBusinessRecord(`/api/products/${productId}`);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setProductRows((records) => records.filter((item) => item.id !== String(productId)));
+    }
+    return { ...result, id: String(productId) };
+  }
+
   async function persistVendor(vendor) {
     const record = normalizeVendor({ ...vendor, id: `VEN-${Date.now()}` });
     const payload = {
@@ -436,10 +516,12 @@ export default function App() {
   }
 
   async function persistVendorPayment(payment) {
-    const result = await createBusinessRecord("/api/vendor-payments", payment);
+    const record = normalizeVendorPayment({ ...payment, id: `PAY-${Date.now()}` });
+    const result = await createBusinessRecord("/api/vendor-payments", toVendorPaymentPayload(record));
     if (result.bootstrap) {
       applyBusinessData(result.bootstrap);
     } else {
+      setVendorPaymentRows((records) => [record, ...records]);
       setVendorRows((records) =>
         records.map((vendor) =>
           vendor.id === String(payment.vendorId)
@@ -448,7 +530,96 @@ export default function App() {
         )
       );
     }
-    return result;
+    return { ...result, record };
+  }
+
+  function toVendorPaymentPayload(payment) {
+    const record = normalizeVendorPayment(payment);
+    const selectedVendor =
+      vendorRows.find((vendor) => vendor.id === record.vendorId) ||
+      vendorRows.find((vendor) => vendor.name === record.vendorName);
+
+    return {
+      vendorId: selectedVendor?.id ? Number(selectedVendor.id) : undefined,
+      amount: record.amount,
+      mode: record.mode,
+      paymentDate: record.paymentDate,
+      notes: record.notes,
+    };
+  }
+
+  async function updateVendorPayment(payment) {
+    const record = normalizeVendorPayment(payment);
+    const result = await updateBusinessRecord(`/api/vendor-payments/${record.id}`, toVendorPaymentPayload(record));
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setVendorPaymentRows((records) => records.map((item) => (item.id === record.id ? record : item)));
+    }
+    return { ...result, record };
+  }
+
+  async function deleteVendorPayment(paymentId) {
+    const result = await deleteBusinessRecord(`/api/vendor-payments/${paymentId}`);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setVendorPaymentRows((records) => records.filter((item) => item.id !== String(paymentId)));
+    }
+    return { ...result, id: String(paymentId) };
+  }
+
+  function toVendorPurchasePayload(purchase) {
+    const record = normalizeVendorPurchase(purchase);
+    const selectedVendor =
+      vendorRows.find((vendor) => vendor.id === record.vendorId) ||
+      vendorRows.find((vendor) => vendor.name === record.vendor);
+
+    return {
+      vendorId: selectedVendor?.id ? Number(selectedVendor.id) : undefined,
+      vendorName: record.vendor,
+      purchaseDate: record.date,
+      itemName: record.material,
+      category: record.category,
+      qty: record.qty,
+      unit: record.unit,
+      rate: record.rate,
+      paid: record.paid,
+      mode: record.mode,
+      notes: record.notes,
+    };
+  }
+
+  async function persistVendorPurchase(purchase) {
+    const record = normalizeVendorPurchase({ ...purchase, id: `PUR-${Date.now()}` });
+    const result = await createBusinessRecord("/api/vendor-purchases", toVendorPurchasePayload(record));
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setVendorPurchaseRows((records) => [record, ...records]);
+    }
+    return { ...result, record };
+  }
+
+  async function updateVendorPurchase(purchase) {
+    const record = normalizeVendorPurchase(purchase);
+    const result = await updateBusinessRecord(`/api/vendor-purchases/${record.id}`, toVendorPurchasePayload(record));
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setVendorPurchaseRows((records) => records.map((item) => (item.id === record.id ? record : item)));
+    }
+    return { ...result, record };
+  }
+
+  async function deleteVendorPurchase(purchaseId) {
+    const result = await deleteBusinessRecord(`/api/vendor-purchases/${purchaseId}`);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setVendorPurchaseRows((records) => records.filter((item) => item.id !== String(purchaseId)));
+    }
+    return { ...result, id: String(purchaseId) };
   }
 
   async function persistExpense(expense) {
@@ -559,6 +730,34 @@ export default function App() {
     return result;
   }
 
+  async function updateUser(user) {
+    const record = normalizeUser(user);
+    const payload = {
+      username: record.username,
+      password: user.password,
+      name: record.name,
+      role: record.role,
+      status: record.status,
+    };
+    const result = await updateBusinessRecord(`/api/users/${record.id}`, payload);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setUserRows((records) => records.map((item) => (item.id === record.id ? record : item)));
+    }
+    return result;
+  }
+
+  async function deleteUser(userId) {
+    const result = await deleteBusinessRecord(`/api/users/${userId}`);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setUserRows((records) => records.filter((item) => item.id !== String(userId)));
+    }
+    return { ...result, id: String(userId) };
+  }
+
   if (!session) {
     return <LoginPage onLogin={login} />;
   }
@@ -573,6 +772,8 @@ export default function App() {
         materialRows={materialRows}
         productRows={productRows}
         vendorRows={vendorRows}
+        vendorPurchaseRows={vendorPurchaseRows}
+        vendorPaymentRows={vendorPaymentRows}
         expenseRows={expenseRows}
         categoryRows={categoryRows}
         userRows={userRows}
@@ -587,10 +788,17 @@ export default function App() {
         onDeleteMaterial={deleteMaterial}
         onUpdateMaterialStock={updateMaterialStock}
         onSaveProduct={persistProduct}
+        onUpdateProduct={updateProduct}
+        onDeleteProduct={deleteProduct}
         onSaveVendor={persistVendor}
         onUpdateVendor={updateVendor}
         onDeleteVendor={deleteVendor}
         onSaveVendorPayment={persistVendorPayment}
+        onUpdateVendorPayment={updateVendorPayment}
+        onDeleteVendorPayment={deleteVendorPayment}
+        onSaveVendorPurchase={persistVendorPurchase}
+        onUpdateVendorPurchase={updateVendorPurchase}
+        onDeleteVendorPurchase={deleteVendorPurchase}
         onSaveExpense={persistExpense}
         onUpdateExpense={updateExpense}
         onDeleteExpense={deleteExpense}
@@ -598,6 +806,8 @@ export default function App() {
         onUpdateCategory={updateCategory}
         onDeleteCategory={deleteCategory}
         onSaveUser={persistUser}
+        onUpdateUser={updateUser}
+        onDeleteUser={deleteUser}
       />
     </Shell>
   );
@@ -748,6 +958,8 @@ function RouteView({
   materialRows,
   productRows,
   vendorRows,
+  vendorPurchaseRows,
+  vendorPaymentRows,
   expenseRows,
   categoryRows,
   userRows,
@@ -762,10 +974,17 @@ function RouteView({
   onDeleteMaterial,
   onUpdateMaterialStock,
   onSaveProduct,
+  onUpdateProduct,
+  onDeleteProduct,
   onSaveVendor,
   onUpdateVendor,
   onDeleteVendor,
   onSaveVendorPayment,
+  onUpdateVendorPayment,
+  onDeleteVendorPayment,
+  onSaveVendorPurchase,
+  onUpdateVendorPurchase,
+  onDeleteVendorPurchase,
   onSaveExpense,
   onUpdateExpense,
   onDeleteExpense,
@@ -773,12 +992,31 @@ function RouteView({
   onUpdateCategory,
   onDeleteCategory,
   onSaveUser,
+  onUpdateUser,
+  onDeleteUser,
 }) {
   if (route === "operations") {
-    return <OperationsDashboard salesBills={salesBills} staff={staff} materialRows={materialRows} vendorRows={vendorRows} onStartBill={() => onRoute("sales-slip")} />;
+    return (
+      <OperationsDashboard
+        salesBills={salesBills}
+        staff={staff}
+        materialRows={materialRows}
+        vendorRows={vendorRows}
+        expenseRows={expenseRows}
+        onStartBill={() => onRoute("sales-slip")}
+      />
+    );
   }
   if (route === "finance") {
-    return <FinanceDashboard salesBills={salesBills} staff={staff} expenseRows={expenseRows} vendorRows={vendorRows} />;
+    return (
+      <FinanceDashboard
+        salesBills={salesBills}
+        staff={staff}
+        expenseRows={expenseRows}
+        vendorRows={vendorRows}
+        vendorPurchaseRows={vendorPurchaseRows}
+      />
+    );
   }
   if (route === "sales-slip") {
     return <SalesSlipPage bills={salesBills} status={salesStatus} productRows={productRows} onSaveBill={onSaveBill} />;
@@ -793,21 +1031,35 @@ function RouteView({
         onDeleteMaterial={onDeleteMaterial}
         onUpdateMaterialStock={onUpdateMaterialStock}
         onSaveProduct={onSaveProduct}
+        onUpdateProduct={onUpdateProduct}
+        onDeleteProduct={onDeleteProduct}
       />
     );
   }
   if (route === "vendor-payment") {
-    return <VendorPaymentPage vendorRows={vendorRows} onSaveVendorPayment={onSaveVendorPayment} />;
+    return (
+      <VendorPaymentPage
+        vendorRows={vendorRows}
+        paymentRows={vendorPaymentRows}
+        onSaveVendorPayment={onSaveVendorPayment}
+        onUpdateVendorPayment={onUpdateVendorPayment}
+        onDeleteVendorPayment={onDeleteVendorPayment}
+      />
+    );
   }
   if (route === "daily-vendors") {
     return (
       <DailyVendorsPage
         vendorRows={vendorRows}
         materialRows={materialRows}
+        purchaseRows={vendorPurchaseRows}
         categoryRows={categoryRows}
         onSaveVendor={onSaveVendor}
         onSaveCategory={onSaveCategory}
         onSaveMaterial={onSaveMaterial}
+        onSavePurchase={onSaveVendorPurchase}
+        onUpdatePurchase={onUpdateVendorPurchase}
+        onDeletePurchase={onDeleteVendorPurchase}
       />
     );
   }
@@ -857,14 +1109,20 @@ function RouteView({
       />
     );
   }
-  if (route === "users") return <UsersPage userRows={userRows} onSaveUser={onSaveUser} />;
+  if (route === "users") {
+    return <UsersPage userRows={userRows} onSaveUser={onSaveUser} onUpdateUser={onUpdateUser} onDeleteUser={onDeleteUser} />;
+  }
   return null;
 }
 
-function OperationsDashboard({ salesBills, staff, materialRows, vendorRows, onStartBill }) {
+function OperationsDashboard({ salesBills, staff, materialRows, vendorRows, expenseRows, onStartBill }) {
   const todaysSales = totalForDate(salesBills, today());
-  const totalExpenses = seededExpenses.reduce((sum, item) => sum + item.amount, 0);
+  const totalExpenses = expenseRows.reduce((sum, item) => sum + item.amount, 0);
   const vendorDues = vendorRows.reduce((sum, item) => sum + item.pending, 0);
+  const lowStockRows = materialRows.filter((material) => material.stock <= material.min);
+  const inventoryReady = materialRows.length
+    ? Math.round(((materialRows.length - lowStockRows.length) / materialRows.length) * 100)
+    : 0;
 
   return (
     <Page>
@@ -879,17 +1137,18 @@ function OperationsDashboard({ salesBills, staff, materialRows, vendorRows, onSt
       <section className="grid two">
         <Panel title="Operations dashboard" subtitle="Today's shop pulse" action="New bill" onAction={onStartBill}>
           <div className="batch-card">
-            <span>FRESH BATCH</span>
-            <strong>82%</strong>
-            <p>Sweets, breakfast and namkeen ready for counter sale.</p>
+            <span>STOCK STATUS</span>
+            <strong>{inventoryReady}%</strong>
+            <p>{materialRows.length ? `${lowStockRows.length} low-stock item${lowStockRows.length === 1 ? "" : "s"} found.` : "Connect inventory data to see stock status."}</p>
           </div>
-          {["Milk and ghee quality check", "Fresh jalebi counter ready", "Gift box station stocked", "Thermal printer paper loaded"].map((item, index) => (
-            <div className="check-row" key={item}>
+          {materialRows.slice(0, 4).map((material) => (
+            <div className="check-row" key={material.id}>
               <CheckCircle2 size={17} />
-              <span>{item}</span>
-              <b>{index === 2 ? "Pending" : "Done"}</b>
+              <span>{material.name}</span>
+              <b>{material.stock <= material.min ? "Low" : "Ready"}</b>
             </div>
           ))}
+          {!materialRows.length && <div className="empty-state">No stock records found</div>}
         </Panel>
         <Panel title="Low stock" subtitle="Material alerts">
           <div className="stock-alerts">
@@ -917,10 +1176,10 @@ function OperationsDashboard({ salesBills, staff, materialRows, vendorRows, onSt
   );
 }
 
-function FinanceDashboard({ salesBills, staff, expenseRows, vendorRows }) {
+function FinanceDashboard({ salesBills, staff, expenseRows, vendorRows, vendorPurchaseRows }) {
   const monthSales = salesBills.reduce((sum, bill) => sum + bill.total, 0);
   const totalExpenses = expenseRows.reduce((sum, item) => sum + item.amount, 0);
-  const purchases = seededPurchases.reduce((sum, item) => sum + item.qty * item.rate, 0);
+  const purchases = vendorPurchaseRows.reduce((sum, item) => sum + Number(item.amount || item.qty * item.rate || 0), 0);
   const salary = staff.reduce((sum, item) => sum + item.salary, 0);
   const vendorDues = vendorRows.reduce((sum, item) => sum + item.pending, 0);
 
@@ -929,7 +1188,7 @@ function FinanceDashboard({ salesBills, staff, expenseRows, vendorRows }) {
       <div className="filter-row">
         <label>
           FROM DATE
-          <input type="date" defaultValue="2026-07-01" />
+          <input type="date" defaultValue={monthStart()} />
         </label>
         <label>
           TO DATE
@@ -972,13 +1231,9 @@ function FinanceDashboard({ salesBills, staff, expenseRows, vendorRows }) {
 }
 
 function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
-  const saleProducts = productRows.length ? productRows : products.map(normalizeProduct);
-  const [items, setItems] = useState([
-    { product: "Kaju Katli", qty: 1.25 },
-    { product: "Assorted Gift Box", qty: 2 },
-    { product: "Hot Samosa", qty: 12 },
-  ]);
-  const [discount, setDiscount] = useState(75);
+  const saleProducts = productRows;
+  const [items, setItems] = useState([]);
+  const [discount, setDiscount] = useState(0);
   const [gst, setGst] = useState(false);
   const [mode, setMode] = useState("Cash");
   const [date, setDate] = useState(today());
@@ -991,6 +1246,9 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
 
   const rows = items.map((item) => {
     const product = saleProducts.find((entry) => entry.name === item.product) || saleProducts[0];
+    if (!product) {
+      return { ...item, rate: 0, unit: "", total: 0 };
+    }
     const total = product.rate * Number(item.qty || 0);
     return { ...item, rate: product.rate, unit: product.unit, total };
   });
@@ -1050,13 +1308,19 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
     }
   }, [nextBillNo, savedBillKey]);
 
+  useEffect(() => {
+    if (!items.length && saleProducts[0]) {
+      setItems([{ product: saleProducts[0].name, qty: 1 }]);
+    }
+  }, [items.length, saleProducts]);
+
   function updateItem(index, patch) {
     setItems(items.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
   }
 
   function startNewBill() {
     const freshDate = today();
-    setItems([{ product: saleProducts[0].name, qty: 1 }]);
+    setItems(saleProducts[0] ? [{ product: saleProducts[0].name, qty: 1 }] : []);
     setDiscount(0);
     setGst(false);
     setMode("Cash");
@@ -1068,6 +1332,10 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
 
   async function saveCurrentBill({ forPrint = false } = {}) {
     if (savingBill) {
+      return null;
+    }
+    if (!saleProducts.length || !rows.length) {
+      setMessage("Add products before saving a bill.");
       return null;
     }
     if (savedBillKey === currentBillKey) {
@@ -1119,7 +1387,12 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
               <h2>Counter bill</h2>
             </div>
             <div className="button-row sales-header-actions">
-              <button className="action-button" type="button" onClick={() => setItems([...items, { product: saleProducts[0].name, qty: 1 }])}>
+              <button
+                className="action-button"
+                type="button"
+                onClick={() => setItems([...items, { product: saleProducts[0].name, qty: 1 }])}
+                disabled={!saleProducts.length}
+              >
                 <PackageSearch size={18} />
                 Add item
               </button>
@@ -1141,6 +1414,7 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
               <span>TOTAL</span>
               <span />
             </div>
+            {!saleProducts.length && <div className="empty-state">No products found</div>}
             {rows.map((item, index) => (
               <div className="sale-line" key={`${item.product}-${index}`}>
                 <select value={item.product} onChange={(event) => updateItem(index, { product: event.target.value })}>
@@ -1281,6 +1555,8 @@ function InventoryPage({
   onDeleteMaterial,
   onUpdateMaterialStock,
   onSaveProduct,
+  onUpdateProduct,
+  onDeleteProduct,
 }) {
   const [modalMode, setModalMode] = useState(null);
   const [materialForm, setMaterialForm] = useState({
@@ -1343,6 +1619,22 @@ function InventoryPage({
     setModalMode("material");
   }
 
+  function openProductForm(product = null) {
+    setProductForm(
+      product
+        ? { ...product }
+        : {
+            sku: "",
+            name: "",
+            category: "Sweets",
+            unit: "kg",
+            rate: 0,
+            taxRate: 0,
+          }
+    );
+    setModalMode("product");
+  }
+
   async function submitMaterial(event) {
     event.preventDefault();
     const result = await (materialForm.id ? onUpdateMaterial(materialForm) : onSaveMaterial(materialForm));
@@ -1359,10 +1651,16 @@ function InventoryPage({
 
   async function submitProduct(event) {
     event.preventDefault();
-    const result = await onSaveProduct(productForm);
+    const result = await (productForm.id ? onUpdateProduct(productForm) : onSaveProduct(productForm));
     setProductForm({ sku: "", name: "", category: "Sweets", unit: "kg", rate: 0, taxRate: 0 });
-    setMessage("Product saved");
+    setMessage(productForm.id ? "Product updated" : "Product saved");
     setModalMode(null);
+  }
+
+  async function removeProduct(product) {
+    if (!window.confirm(`Delete ${product.name}?`)) return;
+    await onDeleteProduct(product.id);
+    setMessage("Product deleted");
   }
 
   function submitStock(event) {
@@ -1405,13 +1703,17 @@ function InventoryPage({
           ])}
         />
       </Panel>
-      <Panel title="Finished goods" subtitle="Ready stock" action="Add product" onAction={() => setModalMode("product")}>
+      <Panel title="Finished goods" subtitle="Ready stock" action="Add product" onAction={() => openProductForm()}>
         <div className="product-grid">
           {productRows.map((product) => (
             <article key={product.name}>
               <span>{product.category.toUpperCase()}</span>
               <strong>{product.name}</strong>
               <p>{product.stock ? `${product.stock} ${product.unit}` : product.unit} - {money(product.rate)}</p>
+              <RowActions
+                onEdit={() => openProductForm(product)}
+                onDelete={() => removeProduct(product)}
+              />
             </article>
           ))}
         </div>
@@ -1449,7 +1751,7 @@ function InventoryPage({
         </Modal>
       )}
       {modalMode === "product" && (
-        <Modal title="Add product" eyebrow="Finished goods" onClose={() => setModalMode(null)}>
+        <Modal title={productForm.id ? "Edit product" : "Add product"} eyebrow="Finished goods" onClose={() => setModalMode(null)}>
           <form className="modal-form grid-form" onSubmit={submitProduct}>
             <label className="field"><span>SKU</span><input value={productForm.sku} onChange={(event) => setProductForm({ ...productForm, sku: event.target.value })} /></label>
             <label className="field"><span>Name</span><input required value={productForm.name} onChange={(event) => setProductForm({ ...productForm, name: event.target.value })} /></label>
@@ -1457,7 +1759,7 @@ function InventoryPage({
             <label className="field"><span>Unit</span><input value={productForm.unit} onChange={(event) => setProductForm({ ...productForm, unit: event.target.value })} /></label>
             <label className="field"><span>Rate</span><input type="number" value={productForm.rate} onChange={(event) => setProductForm({ ...productForm, rate: event.target.value })} /></label>
             <label className="field"><span>GST %</span><input type="number" value={productForm.taxRate} onChange={(event) => setProductForm({ ...productForm, taxRate: event.target.value })} /></label>
-            <button className="action-button full" type="submit">Save product</button>
+            <button className="action-button full" type="submit">{productForm.id ? "Update product" : "Save product"}</button>
           </form>
         </Modal>
       )}
@@ -1465,12 +1767,13 @@ function InventoryPage({
   );
 }
 
-function VendorPaymentPage({ vendorRows, onSaveVendorPayment }) {
+function VendorPaymentPage({ vendorRows, paymentRows, onSaveVendorPayment, onUpdateVendorPayment, onDeleteVendorPayment }) {
   const [vendorId, setVendorId] = useState(vendorRows[3]?.id || vendorRows[0]?.id || "");
-  const [amount, setAmount] = useState(25000);
+  const [amount, setAmount] = useState(0);
   const [mode, setMode] = useState("UPI");
   const [paymentDate, setPaymentDate] = useState(today());
   const [notes, setNotes] = useState("");
+  const [editingPaymentId, setEditingPaymentId] = useState("");
   const [message, setMessage] = useState("");
   const selected = vendorRows.find((vendor) => vendor.id === vendorId) || vendorRows[0] || { id: "", name: "Vendor", pending: 0 };
   const balance = Math.max(0, selected.pending - Number(amount || 0));
@@ -1482,17 +1785,53 @@ function VendorPaymentPage({ vendorRows, onSaveVendorPayment }) {
   }, [vendorId, vendorRows]);
 
   async function submitPayment() {
-    if (!selected) return;
-    const result = await onSaveVendorPayment({
+    if (!selected?.id) return;
+    const payment = {
       vendorId: selected.id,
+      vendorName: selected.name,
       amount: Number(amount || 0),
       mode,
       paymentDate,
       notes,
-    });
-    setMessage("Vendor payment saved");
+    };
+    if (editingPaymentId) {
+      await onUpdateVendorPayment({ ...payment, id: editingPaymentId });
+      setMessage("Vendor payment updated");
+      setEditingPaymentId("");
+    } else {
+      await onSaveVendorPayment(payment);
+      setMessage("Vendor payment saved");
+    }
     setAmount(0);
     setNotes("");
+  }
+
+  function editPayment(payment) {
+    setVendorId(String(payment.vendorId || selected.id || ""));
+    setAmount(payment.amount);
+    setMode(payment.mode);
+    setPaymentDate(payment.paymentDate);
+    setNotes(payment.notes || "");
+    setEditingPaymentId(payment.id);
+    setMessage("Editing vendor payment");
+  }
+
+  async function deletePayment(payment) {
+    if (!window.confirm(`Delete payment ${money(payment.amount)}?`)) return;
+    await onDeleteVendorPayment(payment.id);
+    if (editingPaymentId === payment.id) {
+      cancelPaymentEdit();
+    }
+    setMessage("Vendor payment deleted");
+  }
+
+  function cancelPaymentEdit() {
+    setEditingPaymentId("");
+    setAmount(0);
+    setNotes("");
+    setPaymentDate(today());
+    setMode("UPI");
+    setMessage("");
   }
 
   return (
@@ -1541,7 +1880,12 @@ function VendorPaymentPage({ vendorRows, onSaveVendorPayment }) {
             <span>Balance after payment <b>{money(balance)}</b></span>
           </div>
           {message && <p className="db-message">{message}</p>}
-          <button className="action-button full-action" type="button" onClick={submitPayment}>Save vendor payment</button>
+          <div className="button-row full">
+            <button className="action-button full" type="button" onClick={submitPayment}>
+              {editingPaymentId ? "Update vendor payment" : "Save vendor payment"}
+            </button>
+            {editingPaymentId && <button className="ghost-button" type="button" onClick={cancelPaymentEdit}>Cancel edit</button>}
+          </div>
         </Panel>
         <Panel title="Vendor ledger" subtitle="Pending balance">
           <DataTable
@@ -1550,13 +1894,42 @@ function VendorPaymentPage({ vendorRows, onSaveVendorPayment }) {
           />
         </Panel>
       </section>
+      <Panel title="Payment history" subtitle="Vendor payment records">
+        <DataTable
+          columns={["Date", "Vendor", "Mode", "Amount", "Notes", "Action"]}
+          rows={paymentRows.map((payment) => [
+            payment.paymentDate,
+            payment.vendorName,
+            payment.mode,
+            money(payment.amount),
+            payment.notes || "-",
+            <RowActions
+              onEdit={() => editPayment(payment)}
+              onDelete={() => deletePayment(payment)}
+            />,
+          ])}
+          empty="No vendor payments found"
+        />
+      </Panel>
     </Page>
   );
 }
 
-function DailyVendorsPage({ vendorRows, materialRows, categoryRows, onSaveVendor, onSaveCategory, onSaveMaterial }) {
-  const vendorOptions = useMemo(() => (vendorRows.length ? vendorRows : vendors.map(normalizeVendor)), [vendorRows]);
-  const materialOptions = useMemo(() => (materialRows.length ? materialRows : materials.map(normalizeMaterial)), [materialRows]);
+function DailyVendorsPage({
+  vendorRows,
+  materialRows,
+  purchaseRows,
+  categoryRows,
+  onSaveVendor,
+  onSaveCategory,
+  onSaveMaterial,
+  onSavePurchase,
+  onUpdatePurchase,
+  onDeletePurchase,
+}) {
+  const formRef = useRef(null);
+  const vendorOptions = useMemo(() => vendorRows, [vendorRows]);
+  const materialOptions = useMemo(() => materialRows, [materialRows]);
   const categoryOptions = useMemo(
     () =>
       Array.from(
@@ -1572,7 +1945,6 @@ function DailyVendorsPage({ vendorRows, materialRows, categoryRows, onSaveVendor
       ),
     [categoryRows, materialOptions, vendorOptions]
   );
-  const [records, setRecords] = useState(seededPurchases);
   const [dateFilter, setDateFilter] = useState(today());
   const [modalMode, setModalMode] = useState(null);
   const [editingPurchaseId, setEditingPurchaseId] = useState("");
@@ -1589,6 +1961,20 @@ function DailyVendorsPage({ vendorRows, materialRows, categoryRows, onSaveVendor
     mode: "Cash",
     notes: "",
   });
+  const vendorSelectOptions = useMemo(() => {
+    const options = [...vendorOptions];
+    if (form.vendor && !options.some((vendor) => vendor.name === form.vendor)) {
+      options.unshift({ id: `current-${form.vendor}`, name: form.vendor, category: form.category });
+    }
+    return options;
+  }, [form.category, form.vendor, vendorOptions]);
+  const materialSelectOptions = useMemo(() => {
+    const options = [...materialOptions];
+    if (form.material && !options.some((material) => material.name === form.material)) {
+      options.unshift({ id: `current-${form.material}`, name: form.material, category: form.category, unit: form.unit, rate: form.rate });
+    }
+    return options;
+  }, [form.category, form.material, form.rate, form.unit, materialOptions]);
   const [vendorForm, setVendorForm] = useState({ name: "", category: categoryOptions[0] || "Dairy", contact: "" });
   const [categoryForm, setCategoryForm] = useState({ type: "Raw Material", name: "" });
   const [materialForm, setMaterialForm] = useState({
@@ -1602,7 +1988,7 @@ function DailyVendorsPage({ vendorRows, materialRows, categoryRows, onSaveVendor
 
   useEffect(() => {
     const selected = materialOptions.find((item) => item.name === form.material);
-    if (selected || !materialOptions[0]) return;
+    if (editingPurchaseId || selected || !materialOptions[0]) return;
     const first = materialOptions[0];
     setForm((current) => ({
       ...current,
@@ -1611,31 +1997,42 @@ function DailyVendorsPage({ vendorRows, materialRows, categoryRows, onSaveVendor
       unit: first.unit || current.unit,
       rate: first.rate || current.rate,
     }));
-  }, [form.material, materialOptions]);
+  }, [editingPurchaseId, form.material, materialOptions]);
 
-  function savePurchase(event) {
+  async function savePurchase(event) {
     event.preventDefault();
     if (editingPurchaseId) {
-      setRecords((items) =>
-        items.map((record) => (record.id === editingPurchaseId ? { ...form, id: editingPurchaseId } : record))
-      );
+      await onUpdatePurchase({ ...form, id: editingPurchaseId });
       setMessage("Daily vendor entry updated");
       setEditingPurchaseId("");
       return;
     }
-    setRecords([{ ...form, id: `PUR-${Date.now()}` }, ...records]);
+    await onSavePurchase(form);
     setMessage("Daily vendor entry saved");
   }
 
   function editPurchase(record) {
-    setForm({ ...record });
-    setEditingPurchaseId(record.id);
+    const purchase = normalizeVendorPurchase(record);
+    setForm({
+      date: purchase.date,
+      vendor: purchase.vendor,
+      material: purchase.material,
+      category: purchase.category,
+      qty: purchase.qty,
+      unit: purchase.unit,
+      rate: purchase.rate,
+      paid: purchase.paid,
+      mode: purchase.mode,
+      notes: purchase.notes,
+    });
+    setEditingPurchaseId(purchase.id);
     setMessage("Editing daily vendor entry");
+    window.requestAnimationFrame(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }
 
-  function deletePurchase(record) {
+  async function deletePurchase(record) {
     if (!window.confirm(`Delete purchase for ${record.material}?`)) return;
-    setRecords((items) => items.filter((item) => item.id !== record.id));
+    await onDeletePurchase(record.id);
     if (editingPurchaseId === record.id) {
       setEditingPurchaseId("");
     }
@@ -1746,17 +2143,17 @@ function DailyVendorsPage({ vendorRows, materialRows, categoryRows, onSaveVendor
     setModalMode(null);
   }
 
-  const filtered = records.filter((record) => !dateFilter || record.date === dateFilter);
+  const filtered = purchaseRows.filter((record) => !dateFilter || record.date === dateFilter);
 
   return (
     <Page>
       <Panel title="Daily vendor" subtitle="Date wise purchase and payment">
         {message && <p className="db-message">{message}</p>}
-        <form className="form-grid purchase-form" onSubmit={savePurchase}>
+        <form className="form-grid purchase-form" onSubmit={savePurchase} ref={formRef}>
           <label>DATE<input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></label>
-          <label>VENDOR<select value={form.vendor} onChange={(event) => changeVendor(event.target.value)}><option value="__add_vendor__">Add vendor</option>{vendorOptions.map((vendor) => <option key={vendor.id}>{vendor.name}</option>)}</select></label>
+          <label>VENDOR<select value={form.vendor} onChange={(event) => changeVendor(event.target.value)}><option value="__add_vendor__">Add vendor</option>{vendorSelectOptions.map((vendor) => <option key={vendor.id}>{vendor.name}</option>)}</select></label>
           <label>CATEGORY<select value={form.category} onChange={(event) => changeCategory(event.target.value)}><option value="__add_category__">Add category</option>{Array.from(new Set([...categoryOptions, form.category].filter(Boolean))).map((item) => <option key={item}>{item}</option>)}</select></label>
-          <label>RAW MATERIAL<select value={form.material} onChange={(event) => changeMaterial(event.target.value)}><option value="__add_material__">Add raw material</option>{materialOptions.map((item) => <option key={item.id}>{item.name}</option>)}</select></label>
+          <label>RAW MATERIAL<select value={form.material} onChange={(event) => changeMaterial(event.target.value)}><option value="__add_material__">Add raw material</option>{materialSelectOptions.map((item) => <option key={item.id}>{item.name}</option>)}</select></label>
           <label>QTY<input type="number" value={form.qty} onChange={(event) => setForm({ ...form, qty: event.target.value })} /></label>
           <label>UNIT<input value={form.unit} onChange={(event) => setForm({ ...form, unit: event.target.value })} /></label>
           <label>RATE<input type="number" value={form.rate} onChange={(event) => setForm({ ...form, rate: event.target.value })} /></label>
@@ -1832,18 +2229,15 @@ function EmployeesPage({ staff, status, onSaveEmployee, onUpdateEmployee, onDele
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(() => blankEmployeeForm());
   const [editingId, setEditingId] = useState("");
-  const [salaryMonth, setSalaryMonth] = useState("2026-07");
+  const [salaryMonth, setSalaryMonth] = useState(today().slice(0, 7));
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState(status);
   const selected = staff.find((employee) => employee.id === selectedId) || staff[0];
   const filtered = staff.filter((employee) =>
     `${employee.name} ${employee.role} ${employee.contact}`.toLowerCase().includes(query.toLowerCase())
   );
-  const attendanceRows = [
-    ["2026-05-02", "Present", "09:00:00", "-"],
-    ["2026-05-01", "Present", "09:00:00", "-"],
-  ];
-  const salaryRows = [["-", money(0), "Cash", "0"]];
+  const attendanceRows = [];
+  const salaryRows = [];
 
   useEffect(() => {
     if (!selectedId || !staff.some((employee) => employee.id === selectedId)) {
@@ -1909,9 +2303,11 @@ function EmployeesPage({ staff, status, onSaveEmployee, onUpdateEmployee, onDele
     }
   }
 
-  function deleteEmployee(employeeId) {
+  async function deleteEmployee(employeeId) {
+    const employee = staff.find((item) => item.id === employeeId);
+    if (employee && !window.confirm(`Delete ${employee.name}?`)) return;
     const remaining = staff.filter((employee) => employee.id !== employeeId);
-    onDeleteEmployee(employeeId);
+    await onDeleteEmployee(employeeId);
     setSelectedId(remaining[0]?.id || "");
     setMessage("Employee removed");
   }
@@ -2014,35 +2410,24 @@ function EmployeesPage({ staff, status, onSaveEmployee, onUpdateEmployee, onDele
               </div>
               <section className="employee-report-section">
                 <h3>Attendance history</h3>
-                <table>
-                  <thead><tr><th>Date</th><th>Status</th><th>In</th><th>Out</th></tr></thead>
-                  <tbody>
-                    {attendanceRows.map(([day, rowStatus, inTime, outTime]) => (
-                      <tr key={day}>
-                        <td>{day}</td>
-                        <td><span className="status-badge">{rowStatus}</span></td>
-                        <td>{inTime}</td>
-                        <td>{outTime}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <DataTable
+                  columns={["Date", "Status", "In", "Out"]}
+                  rows={attendanceRows.map(([day, rowStatus, inTime, outTime]) => [
+                    day,
+                    <span className="status-badge">{rowStatus}</span>,
+                    inTime,
+                    outTime,
+                  ])}
+                  empty="No attendance records found"
+                />
               </section>
               <section className="employee-report-section">
                 <h3>Salary payments</h3>
-                <table>
-                  <thead><tr><th>Date</th><th>Amount</th><th>Mode</th><th>Leave</th></tr></thead>
-                  <tbody>
-                    {salaryRows.map(([day, amount, rowMode, leave]) => (
-                      <tr key={`${day}-${amount}`}>
-                        <td>{day}</td>
-                        <td>{amount}</td>
-                        <td>{rowMode}</td>
-                        <td>{leave}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <DataTable
+                  columns={["Date", "Amount", "Mode", "Leave"]}
+                  rows={salaryRows.map(([day, amount, rowMode, leave]) => [day, amount, rowMode, leave])}
+                  empty="No salary payments found"
+                />
               </section>
             </>
           ) : (
@@ -2451,27 +2836,52 @@ function CategoriesPage({
   );
 }
 
-function UsersPage({ userRows, onSaveUser }) {
+function UsersPage({ userRows, onSaveUser, onUpdateUser, onDeleteUser }) {
   const modules = navGroups.flatMap((group) => group.items.map((item) => item.label));
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ username: "", password: "", name: "", role: "accountant", status: "Active" });
   const [message, setMessage] = useState("");
 
+  function openUserForm(user = null) {
+    setForm(user ? { ...user, password: "" } : { username: "", password: "", name: "", role: "accountant", status: "Active" });
+    setShowForm(true);
+  }
+
   async function submitUser(event) {
     event.preventDefault();
-    const result = await onSaveUser(form);
-    setMessage("User saved");
+    const result = await (form.id ? onUpdateUser(form) : onSaveUser(form));
+    setMessage(form.id ? "User updated" : "User saved");
     setForm({ username: "", password: "", name: "", role: "accountant", status: "Active" });
     setShowForm(false);
   }
 
+  async function removeUser(user) {
+    if (user.protected) return;
+    if (!window.confirm(`Delete ${user.username}?`)) return;
+    await onDeleteUser(user.id);
+    setMessage("User deleted");
+  }
+
   return (
     <Page>
-      <Panel title="User management" subtitle="ERP users and roles" action="Create user" onAction={() => setShowForm(true)}>
+      <Panel title="User management" subtitle="ERP users and roles" action="Create user" onAction={() => openUserForm()}>
         {message && <p className="db-message">{message}</p>}
         <DataTable
           columns={["User", "Name", "Role", "Status", "Action"]}
-          rows={userRows.map((user) => [user.username, user.name, user.role, user.status, user.protected ? "Protected" : "Delete"])}
+          rows={userRows.map((user) => [
+            user.username,
+            user.name,
+            user.role,
+            user.status,
+            user.protected ? (
+              <button className="ghost-button" type="button" onClick={() => openUserForm(user)}>Edit</button>
+            ) : (
+              <RowActions
+                onEdit={() => openUserForm(user)}
+                onDelete={() => removeUser(user)}
+              />
+            ),
+          ])}
         />
       </Panel>
       <Panel title="Access control" subtitle="Role permissions">
@@ -2481,14 +2891,14 @@ function UsersPage({ userRows, onSaveUser }) {
         />
       </Panel>
       {showForm && (
-        <Modal title="Create user" eyebrow="User record" onClose={() => setShowForm(false)}>
+        <Modal title={form.id ? "Edit user" : "Create user"} eyebrow="User record" onClose={() => setShowForm(false)}>
           <form className="modal-form grid-form" onSubmit={submitUser}>
             <label className="field"><span>Username</span><input required value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} /></label>
             <label className="field"><span>Full name</span><input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
-            <label className="field"><span>Password</span><input required type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
+            <label className="field"><span>Password</span><input required={!form.id} type="password" value={form.password || ""} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
             <label className="field"><span>Role</span><select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}><option value="admin">Admin</option><option value="accountant">Accountant</option></select></label>
             <label className="field full"><span>Status</span><select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}><option>Active</option><option>Inactive</option></select></label>
-            <button className="action-button full" type="submit">Save user</button>
+            <button className="action-button full" type="submit">{form.id ? "Update user" : "Save user"}</button>
           </form>
         </Modal>
       )}
