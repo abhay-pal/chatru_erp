@@ -49,6 +49,8 @@ import {
 } from "./db";
 
 const SESSION_KEY = "chatru-halwai-session";
+const appAsset = (path) => `${import.meta.env.BASE_URL || "/"}${path.replace(/^\/+/, "")}`;
+const CHATRU_LOGO_SRC = appAsset("chatru-logo.png");
 const today = () => new Date().toISOString().slice(0, 10);
 
 const iconMap = {
@@ -172,10 +174,12 @@ function normalizeExpense(item, index = 0) {
 }
 
 function normalizeCategory(item, index = 0) {
+  const type = item.type || "Product";
+  const name = item.name || "Category";
   return {
-    id: String(item.id || `${item.type}-${item.name}` || `CAT-${index + 1}`),
-    type: item.type || "Product",
-    name: item.name || "Category",
+    id: String(item.id || `${type}-${name}` || `CAT-${index + 1}`),
+    type,
+    name,
     count: Number(item.count ?? item.items ?? 0),
     items: Number(item.items ?? item.count ?? 0),
     cadence: item.cadence || item.margin || "New",
@@ -500,7 +504,7 @@ function LoginPage({ onLogin }) {
   return (
     <main className="login-screen">
       <form className="login-card" onSubmit={submit}>
-        <img className="brand-logo" src="/chatru-logo.png" alt="Chatru Halwai logo" />
+        <img className="brand-logo" src={CHATRU_LOGO_SRC} alt="Chatru Halwai logo" />
         <h1>CHATRU HALWAI ERP</h1>
         <h2>Login</h2>
         <label>
@@ -541,7 +545,7 @@ function Shell({ user, route, onRoute, onLogout, children }) {
           <button className="icon-button close-button" type="button" onClick={() => setOpen(false)}>
             <X size={18} />
           </button>
-          <img src="/chatru-logo.png" alt="Chatru Halwai logo" />
+          <img src={CHATRU_LOGO_SRC} alt="Chatru Halwai logo" />
           <div>
             <div className="brand-title">Chatru Halwai</div>
             <div className="brand-subtitle">SWEETS & NAMKEEN ERP</div>
@@ -680,7 +684,16 @@ function RouteView({
   if (route === "attendance") return <AttendancePage staff={staff} />;
   if (route === "vendors") return <VendorsPage vendorRows={vendorRows} onSaveVendor={onSaveVendor} />;
   if (route === "expenses") return <ExpensesPage expenseRows={expenseRows} onSaveExpense={onSaveExpense} />;
-  if (route === "categories") return <CategoriesPage categoryRows={categoryRows} onSaveCategory={onSaveCategory} />;
+  if (route === "categories") {
+    return (
+      <CategoriesPage
+        categoryRows={categoryRows}
+        materialRows={materialRows}
+        onSaveCategory={onSaveCategory}
+        onSaveMaterial={onSaveMaterial}
+      />
+    );
+  }
   if (route === "users") return <UsersPage userRows={userRows} onSaveUser={onSaveUser} />;
   return null;
 }
@@ -1011,7 +1024,7 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
             </button>
           </div>
           <div className="thermal-slip">
-            <img className="slip-logo" src="/chatru-logo.png" alt="Chatru Halwai logo" />
+            <img className="slip-logo" src={CHATRU_LOGO_SRC} alt="Chatru Halwai logo" />
             <h3>Chatru Halwai & Sons</h3>
             <p className="slip-subtitle">Sweets & Namkeen - Muzaffarnagar</p>
             <div className="slip-meta">
@@ -1350,8 +1363,17 @@ function VendorPaymentPage({ vendorRows, onSaveVendorPayment }) {
 }
 
 function DailyVendorsPage({ vendorRows, materialRows }) {
-  const vendorOptions = vendorRows.length ? vendorRows : vendors.map(normalizeVendor);
-  const materialOptions = materialRows.length ? materialRows : materials.map(normalizeMaterial);
+  const vendorOptions = useMemo(() => (vendorRows.length ? vendorRows : vendors.map(normalizeVendor)), [vendorRows]);
+  const materialOptions = useMemo(() => (materialRows.length ? materialRows : materials.map(normalizeMaterial)), [materialRows]);
+  const categoryOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [...materialOptions.map((item) => item.category), ...vendorOptions.map((vendor) => vendor.category)].filter(Boolean)
+        )
+      ),
+    [materialOptions, vendorOptions]
+  );
   const [records, setRecords] = useState(seededPurchases);
   const [dateFilter, setDateFilter] = useState(today());
   const [form, setForm] = useState({
@@ -1360,12 +1382,25 @@ function DailyVendorsPage({ vendorRows, materialRows }) {
     material: materialOptions[0]?.name || "",
     category: materialOptions[0]?.category || "Packaging",
     qty: 1,
-    unit: "pcs",
-    rate: 38,
+    unit: materialOptions[0]?.unit || "pcs",
+    rate: materialOptions[0]?.rate || 0,
     paid: 0,
     mode: "Cash",
     notes: "",
   });
+
+  useEffect(() => {
+    const selected = materialOptions.find((item) => item.name === form.material);
+    if (selected || !materialOptions[0]) return;
+    const first = materialOptions[0];
+    setForm((current) => ({
+      ...current,
+      material: first.name,
+      category: first.category || current.category,
+      unit: first.unit || current.unit,
+      rate: first.rate || current.rate,
+    }));
+  }, [form.material, materialOptions]);
 
   function savePurchase(event) {
     event.preventDefault();
@@ -1384,7 +1419,7 @@ function DailyVendorsPage({ vendorRows, materialRows }) {
             const selected = materialOptions.find((item) => item.name === event.target.value);
             setForm({ ...form, material: event.target.value, category: selected?.category || form.category, unit: selected?.unit || form.unit, rate: selected?.rate || form.rate });
           }}>{materialOptions.map((item) => <option key={item.id}>{item.name}</option>)}</select></label>
-          <label>CATEGORY<select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}>{Array.from(new Set(vendorOptions.map((vendor) => vendor.category))).map((item) => <option key={item}>{item}</option>)}</select></label>
+          <label>CATEGORY<select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}>{Array.from(new Set([...categoryOptions, form.category].filter(Boolean))).map((item) => <option key={item}>{item}</option>)}</select></label>
           <label>QTY<input type="number" value={form.qty} onChange={(event) => setForm({ ...form, qty: event.target.value })} /></label>
           <label>UNIT<input value={form.unit} onChange={(event) => setForm({ ...form, unit: event.target.value })} /></label>
           <label>RATE<input type="number" value={form.rate} onChange={(event) => setForm({ ...form, rate: event.target.value })} /></label>
@@ -1804,41 +1839,142 @@ function ExpensesPage({ expenseRows, onSaveExpense }) {
   );
 }
 
-function CategoriesPage({ categoryRows, onSaveCategory }) {
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ type: "Product", name: "", items: 0, margin: "New" });
+function CategoriesPage({ categoryRows, materialRows, onSaveCategory, onSaveMaterial }) {
+  const rawMaterialCategoryOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [
+            ...categoryRows
+              .filter((category) => category.type.toLowerCase() === "raw material")
+              .map((category) => category.name),
+            ...materialRows.map((material) => material.category),
+            "Dairy",
+            "Grocery",
+            "Packaging",
+          ].filter(Boolean)
+        )
+      ),
+    [categoryRows, materialRows]
+  );
+  const [activeTab, setActiveTab] = useState("categories");
+  const [showCategoryForm, setShowCategoryForm] = useState(false);
+  const [showMaterialForm, setShowMaterialForm] = useState(false);
+  const [categoryForm, setCategoryForm] = useState({ type: "Product", name: "", items: 0, margin: "New" });
+  const [materialForm, setMaterialForm] = useState({
+    name: "",
+    category: "Dairy",
+    stock: 0,
+    unit: "kg",
+    min: 0,
+    rate: 0,
+  });
   const [message, setMessage] = useState("");
 
   async function submitCategory(event) {
     event.preventDefault();
-    const result = await onSaveCategory(form);
+    const result = await onSaveCategory(categoryForm);
     setMessage("Category saved");
-    setForm({ type: "Product", name: "", items: 0, margin: "New" });
-    setShowForm(false);
+    setCategoryForm({ type: "Product", name: "", items: 0, margin: "New" });
+    setShowCategoryForm(false);
+  }
+
+  async function submitMaterial(event) {
+    event.preventDefault();
+    const result = await onSaveMaterial(materialForm);
+    setMessage("Raw material saved. It is now available in Daily Vendors.");
+    setMaterialForm({
+      name: "",
+      category: rawMaterialCategoryOptions[0] || "Dairy",
+      stock: 0,
+      unit: "kg",
+      min: 0,
+      rate: 0,
+    });
+    setShowMaterialForm(false);
+    setActiveTab("materials");
   }
 
   return (
     <Page>
-      <Panel title="Category management" subtitle="Product and vendor categories" action="Add category" onAction={() => setShowForm(true)}>
-        {message && <p className="db-message">{message}</p>}
-        <div className="category-grid">
-          {categoryRows.map((category) => (
-            <article key={`${category.type}-${category.name}`}>
-              <span>{category.type.toUpperCase()}</span>
-              <strong>{category.name}</strong>
-              <p>{category.count} items - {category.cadence}</p>
-            </article>
-          ))}
+      <Panel
+        title="Category management"
+        subtitle={activeTab === "materials" ? "Raw material master" : "Product, vendor, and expense categories"}
+        action={activeTab === "materials" ? "Add raw material" : "Add category"}
+        onAction={() => (activeTab === "materials" ? setShowMaterialForm(true) : setShowCategoryForm(true))}
+      >
+        <div className="tabs master-tabs" role="tablist" aria-label="Category master sections">
+          <button
+            className={activeTab === "categories" ? "active" : ""}
+            type="button"
+            onClick={() => setActiveTab("categories")}
+          >
+            Categories
+          </button>
+          <button
+            className={activeTab === "materials" ? "active" : ""}
+            type="button"
+            onClick={() => setActiveTab("materials")}
+          >
+            Raw Material
+          </button>
         </div>
+        {message && <p className="db-message">{message}</p>}
+        {activeTab === "categories" ? (
+          <div className="category-grid">
+            {categoryRows.map((category) => (
+              <article key={`${category.type}-${category.name}`}>
+                <span>{category.type.toUpperCase()}</span>
+                <strong>{category.name}</strong>
+                <p>{category.count} items - {category.cadence}</p>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <DataTable
+            columns={["Raw material", "Category", "Unit", "Rate", "Stock"]}
+            rows={materialRows.map((material) => [
+              material.name,
+              material.category,
+              material.unit,
+              money(material.rate),
+              `${material.stock} ${material.unit}`,
+            ])}
+            empty="No raw materials found"
+          />
+        )}
       </Panel>
-      {showForm && (
-        <Modal title="Add category" eyebrow="Category record" onClose={() => setShowForm(false)}>
+      {showCategoryForm && (
+        <Modal title="Add category" eyebrow="Category record" onClose={() => setShowCategoryForm(false)}>
           <form className="modal-form grid-form" onSubmit={submitCategory}>
-            <label className="field"><span>Type</span><select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}><option>Product</option><option>Vendor</option><option>Expense</option></select></label>
-            <label className="field"><span>Name</span><input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
-            <label className="field"><span>Items</span><input type="number" value={form.items} onChange={(event) => setForm({ ...form, items: event.target.value })} /></label>
-            <label className="field"><span>Margin / note</span><input value={form.margin} onChange={(event) => setForm({ ...form, margin: event.target.value })} /></label>
+            <label className="field"><span>Type</span><select value={categoryForm.type} onChange={(event) => setCategoryForm({ ...categoryForm, type: event.target.value })}><option>Product</option><option>Vendor</option><option>Raw Material</option><option>Expense</option></select></label>
+            <label className="field"><span>Name</span><input required value={categoryForm.name} onChange={(event) => setCategoryForm({ ...categoryForm, name: event.target.value })} /></label>
+            <label className="field"><span>Items</span><input type="number" value={categoryForm.items} onChange={(event) => setCategoryForm({ ...categoryForm, items: event.target.value })} /></label>
+            <label className="field"><span>Margin / note</span><input value={categoryForm.margin} onChange={(event) => setCategoryForm({ ...categoryForm, margin: event.target.value })} /></label>
             <button className="action-button full" type="submit">Save category</button>
+          </form>
+        </Modal>
+      )}
+      {showMaterialForm && (
+        <Modal title="Add raw material" eyebrow="Raw material record" onClose={() => setShowMaterialForm(false)}>
+          <form className="modal-form grid-form" onSubmit={submitMaterial}>
+            <label className="field"><span>Name</span><input required value={materialForm.name} onChange={(event) => setMaterialForm({ ...materialForm, name: event.target.value })} /></label>
+            <label className="field">
+              <span>Category</span>
+              <input
+                list="raw-material-category-options"
+                value={materialForm.category}
+                onChange={(event) => setMaterialForm({ ...materialForm, category: event.target.value })}
+              />
+              <datalist id="raw-material-category-options">
+                {rawMaterialCategoryOptions.map((category) => <option key={category} value={category} />)}
+              </datalist>
+            </label>
+            <label className="field"><span>Stock</span><input type="number" value={materialForm.stock} onChange={(event) => setMaterialForm({ ...materialForm, stock: event.target.value })} /></label>
+            <label className="field"><span>Unit</span><input value={materialForm.unit} onChange={(event) => setMaterialForm({ ...materialForm, unit: event.target.value })} /></label>
+            <label className="field"><span>Minimum</span><input type="number" value={materialForm.min} onChange={(event) => setMaterialForm({ ...materialForm, min: event.target.value })} /></label>
+            <label className="field"><span>Rate</span><input type="number" value={materialForm.rate} onChange={(event) => setMaterialForm({ ...materialForm, rate: event.target.value })} /></label>
+            <button className="action-button full" type="submit">Save raw material</button>
           </form>
         </Modal>
       )}
