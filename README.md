@@ -38,7 +38,7 @@ Use the Node.js deployment for `chatruhalwai.online`.
 Set these environment variables in Hostinger before redeploying:
 
 ```bash
-DB_HOST=localhost
+DB_HOST=127.0.0.1
 DB_PORT=3306
 DB_NAME=u755553180_chatru_erp
 DB_USER=u755553180_chatru_erp
