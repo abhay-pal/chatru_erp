@@ -1040,10 +1040,12 @@ function RouteView({
     return (
       <VendorPaymentPage
         vendorRows={vendorRows}
+        purchaseRows={vendorPurchaseRows}
         paymentRows={vendorPaymentRows}
         onSaveVendorPayment={onSaveVendorPayment}
         onUpdateVendorPayment={onUpdateVendorPayment}
         onDeleteVendorPayment={onDeleteVendorPayment}
+        onUpdatePurchase={onUpdateVendorPurchase}
       />
     );
   }
@@ -1767,16 +1769,57 @@ function InventoryPage({
   );
 }
 
-function VendorPaymentPage({ vendorRows, paymentRows, onSaveVendorPayment, onUpdateVendorPayment, onDeleteVendorPayment }) {
+function VendorPaymentPage({
+  vendorRows,
+  purchaseRows,
+  paymentRows,
+  onSaveVendorPayment,
+  onUpdateVendorPayment,
+  onDeleteVendorPayment,
+  onUpdatePurchase,
+}) {
   const [vendorId, setVendorId] = useState(vendorRows[3]?.id || vendorRows[0]?.id || "");
   const [amount, setAmount] = useState(0);
   const [mode, setMode] = useState("UPI");
   const [paymentDate, setPaymentDate] = useState(today());
   const [notes, setNotes] = useState("");
+  const [selectedDueId, setSelectedDueId] = useState("");
   const [editingPaymentId, setEditingPaymentId] = useState("");
   const [message, setMessage] = useState("");
-  const selected = vendorRows.find((vendor) => vendor.id === vendorId) || vendorRows[0] || { id: "", name: "Vendor", pending: 0 };
-  const balance = Math.max(0, selected.pending - Number(amount || 0));
+  const pendingEntries = useMemo(
+    () =>
+      purchaseRows
+        .map((purchase) => {
+          const purchaseAmount = Number(purchase.amount || Number(purchase.qty || 0) * Number(purchase.rate || 0));
+          const paidAmount = Number(purchase.paid || 0);
+          const pendingAmount = Math.max(0, Number(purchase.pending ?? purchaseAmount - paidAmount));
+          return {
+            ...purchase,
+            amount: purchaseAmount,
+            paid: paidAmount,
+            pending: pendingAmount,
+          };
+        })
+        .filter((purchase) => purchase.pending > 0)
+        .sort((a, b) => `${b.date}${b.id}`.localeCompare(`${a.date}${a.id}`)),
+    [purchaseRows]
+  );
+  const selectedDue = pendingEntries.find((entry) => entry.id === selectedDueId);
+  const selectedVendor = vendorRows.find((vendor) => vendor.id === vendorId);
+  const selected =
+    selectedVendor ||
+    (selectedDue ? { id: selectedDue.vendorId, name: selectedDue.vendor, pending: selectedDue.pending } : null) ||
+    vendorRows[0] ||
+    { id: "", name: "Vendor", pending: 0 };
+  const vendorSelectOptions = useMemo(() => {
+    const options = [...vendorRows];
+    if (vendorId && !options.some((vendor) => vendor.id === vendorId)) {
+      options.unshift({ id: vendorId, name: selectedDue?.vendor || "Selected vendor", category: selectedDue?.category || "" });
+    }
+    return options;
+  }, [selectedDue, vendorId, vendorRows]);
+  const currentPending = selectedDue ? selectedDue.pending : selected.pending;
+  const balance = Math.max(0, Number(currentPending || 0) - Number(amount || 0));
 
   useEffect(() => {
     if (!vendorId && vendorRows[0]) {
@@ -1800,8 +1843,15 @@ function VendorPaymentPage({ vendorRows, paymentRows, onSaveVendorPayment, onUpd
       setEditingPaymentId("");
     } else {
       await onSaveVendorPayment(payment);
+      if (selectedDue && onUpdatePurchase) {
+        await onUpdatePurchase({
+          ...selectedDue,
+          paid: selectedDue.paid + Number(amount || 0),
+        });
+      }
       setMessage("Vendor payment saved");
     }
+    setSelectedDueId("");
     setAmount(0);
     setNotes("");
   }
@@ -1812,8 +1862,20 @@ function VendorPaymentPage({ vendorRows, paymentRows, onSaveVendorPayment, onUpd
     setMode(payment.mode);
     setPaymentDate(payment.paymentDate);
     setNotes(payment.notes || "");
+    setSelectedDueId("");
     setEditingPaymentId(payment.id);
     setMessage("Editing vendor payment");
+  }
+
+  function payPendingEntry(entry) {
+    const vendor = vendorRows.find((item) => item.id === entry.vendorId) || vendorRows.find((item) => item.name === entry.vendor);
+    setVendorId(vendor?.id || entry.vendorId || "");
+    setAmount(entry.pending);
+    setPaymentDate(today());
+    setNotes(`Payment for ${entry.material} purchase on ${entry.date}`);
+    setSelectedDueId(entry.id);
+    setEditingPaymentId("");
+    setMessage(`Selected pending entry: ${entry.vendor} - ${entry.material}`);
   }
 
   async function deletePayment(payment) {
@@ -1827,6 +1889,7 @@ function VendorPaymentPage({ vendorRows, paymentRows, onSaveVendorPayment, onUpd
 
   function cancelPaymentEdit() {
     setEditingPaymentId("");
+    setSelectedDueId("");
     setAmount(0);
     setNotes("");
     setPaymentDate(today());
@@ -1848,8 +1911,14 @@ function VendorPaymentPage({ vendorRows, paymentRows, onSaveVendorPayment, onUpd
             </label>
             <label>
               VENDOR
-              <select value={vendorId} onChange={(event) => setVendorId(event.target.value)}>
-                {vendorRows.map((vendor) => (
+              <select
+                value={vendorId}
+                onChange={(event) => {
+                  setVendorId(event.target.value);
+                  setSelectedDueId("");
+                }}
+              >
+                {vendorSelectOptions.map((vendor) => (
                   <option key={vendor.id} value={vendor.id}>{vendor.name}</option>
                 ))}
               </select>
@@ -1875,22 +1944,36 @@ function VendorPaymentPage({ vendorRows, paymentRows, onSaveVendorPayment, onUpd
             </label>
           </div>
           <div className="payment-summary">
-            <span>Current pending <b>{money(selected.pending)}</b></span>
+            <span>Selected entry <b>{selectedDue ? selectedDue.material : selected.name}</b></span>
+            <span>Current pending <b>{money(currentPending)}</b></span>
             <span>Payment mode <b>{mode}</b></span>
             <span>Balance after payment <b>{money(balance)}</b></span>
           </div>
           {message && <p className="db-message">{message}</p>}
           <div className="button-row full">
             <button className="action-button full" type="button" onClick={submitPayment}>
-              {editingPaymentId ? "Update vendor payment" : "Save vendor payment"}
+              {editingPaymentId ? "Update vendor payment" : selectedDue ? "Pay selected entry" : "Save vendor payment"}
             </button>
             {editingPaymentId && <button className="ghost-button" type="button" onClick={cancelPaymentEdit}>Cancel edit</button>}
+            {selectedDue && <button className="ghost-button" type="button" onClick={cancelPaymentEdit}>Clear selection</button>}
           </div>
         </Panel>
-        <Panel title="Vendor ledger" subtitle="Pending balance">
+        <Panel title="Pending payments" subtitle="Select entry to pay">
           <DataTable
-            columns={["Vendor", "Category", "Pending"]}
-            rows={vendorRows.map((vendor) => [vendor.name, vendor.category, money(vendor.pending)])}
+            columns={["Date", "Vendor", "Item", "Amount", "Paid", "Pending", "Action"]}
+            rows={pendingEntries.map((entry) => [
+              entry.date,
+              entry.vendor,
+              entry.material,
+              money(entry.amount),
+              money(entry.paid),
+              money(entry.pending),
+              <button className="ghost-button table-action-button" type="button" onClick={() => payPendingEntry(entry)}>
+                <WalletCards size={15} />
+                Pay
+              </button>,
+            ])}
+            empty="No pending vendor payments"
           />
         </Panel>
       </section>

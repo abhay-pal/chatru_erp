@@ -578,6 +578,12 @@ select:focus {
   color: #7d4a07;
 }
 
+.table-action-button {
+  min-height: 34px;
+  padding: 0 11px;
+  white-space: nowrap;
+}
+
 .icon-button {
   width: 40px;
   min-width: 40px;
