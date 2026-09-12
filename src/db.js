@@ -132,6 +132,8 @@ function businessRecordFromResult(result) {
     result?.purchase ||
     result?.vendorPayment ||
     result?.payment ||
+    result?.inventoryUsage ||
+    result?.employeeAttendance ||
     result?.expense ||
     result?.category ||
     result?.permission ||
@@ -198,6 +200,7 @@ function toEmployeePayload(employee) {
     salary: Number(employee.salary || 0),
     shiftStart: employee.shiftStart || "09:00:00",
     shiftEnd: employee.shiftEnd || "21:00:00",
+    status: employee.status || "Absent",
   };
 }
 

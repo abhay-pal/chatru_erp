@@ -82,6 +82,24 @@ async function migrate() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS employee_attendance (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      employee_id INT UNSIGNED NULL,
+      employee_name VARCHAR(160) NOT NULL,
+      attendance_date DATE NOT NULL,
+      status VARCHAR(40) NOT NULL DEFAULT 'Absent',
+      check_in TIME NULL,
+      check_out TIME NULL,
+      notes TEXT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY employee_attendance_employee_date_unique (employee_id, attendance_date),
+      INDEX employee_attendance_date_idx (attendance_date),
+      CONSTRAINT employee_attendance_employee_fk FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS raw_stock (
       id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(160) NOT NULL,
@@ -143,6 +161,26 @@ async function migrate() {
       INDEX vendor_purchases_vendor_idx (vendor_id),
       INDEX vendor_purchases_date_idx (purchase_date),
       CONSTRAINT vendor_purchases_vendor_fk FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS inventory_usage (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      material_id INT UNSIGNED NULL,
+      material_name VARCHAR(160) NOT NULL,
+      category VARCHAR(100) NOT NULL DEFAULT '',
+      usage_date DATE NOT NULL,
+      used_qty DECIMAL(12,3) NOT NULL DEFAULT 0,
+      unused_qty DECIMAL(12,3) NOT NULL DEFAULT 0,
+      wastage_qty DECIMAL(12,3) NOT NULL DEFAULT 0,
+      unit VARCHAR(40) NOT NULL DEFAULT 'kg',
+      notes TEXT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX inventory_usage_date_idx (usage_date),
+      INDEX inventory_usage_material_idx (material_id),
+      CONSTRAINT inventory_usage_material_fk FOREIGN KEY (material_id) REFERENCES raw_stock(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
@@ -276,6 +314,19 @@ function mapEmployee(row) {
   };
 }
 
+function mapEmployeeAttendance(row) {
+  return {
+    id: row.id,
+    employeeId: row.employee_id || "",
+    employeeName: row.employee_name,
+    attendanceDate: row.attendance_date,
+    status: row.status || "Absent",
+    checkIn: row.check_in || "",
+    checkOut: row.check_out || "",
+    notes: row.notes || "",
+  };
+}
+
 function mapRawStock(row) {
   return {
     id: row.id,
@@ -332,6 +383,21 @@ function mapVendorPurchase(row) {
     paid,
     pending: Math.max(0, amount - paid),
     mode: row.mode,
+    notes: row.notes || "",
+  };
+}
+
+function mapInventoryUsage(row) {
+  return {
+    id: row.id,
+    materialId: row.material_id || "",
+    materialName: row.material_name,
+    category: row.category,
+    usageDate: row.usage_date,
+    usedQty: number(row.used_qty),
+    unusedQty: number(row.unused_qty),
+    wastageQty: number(row.wastage_qty),
+    unit: row.unit,
     notes: row.notes || "",
   };
 }
@@ -420,6 +486,11 @@ async function listEmployees() {
   return rows.map(mapEmployee);
 }
 
+async function listEmployeeAttendance() {
+  const rows = await query("SELECT * FROM employee_attendance ORDER BY attendance_date DESC, id DESC");
+  return rows.map(mapEmployeeAttendance);
+}
+
 async function listRawStock() {
   const rows = await query("SELECT * FROM raw_stock ORDER BY category, name");
   return rows.map(mapRawStock);
@@ -433,6 +504,11 @@ async function listProducts() {
 async function listVendorPurchases() {
   const rows = await query("SELECT * FROM vendor_purchases ORDER BY purchase_date DESC, id DESC");
   return rows.map(mapVendorPurchase);
+}
+
+async function listInventoryUsage() {
+  const rows = await query("SELECT * FROM inventory_usage ORDER BY usage_date DESC, id DESC");
+  return rows.map(mapInventoryUsage);
 }
 
 async function listVendorPayments() {
@@ -500,12 +576,14 @@ async function listSalesHistory() {
 }
 
 async function getBootstrap() {
-  const [employees, rawStock, products, vendorPurchases, vendorPayments, expenses, categories, users, permissions, salesHistory] =
+  const [employees, employeeAttendance, rawStock, products, vendorPurchases, inventoryUsage, vendorPayments, expenses, categories, users, permissions, salesHistory] =
     await Promise.all([
       listEmployees(),
+      listEmployeeAttendance(),
       listRawStock(),
       listProducts(),
       listVendorPurchases(),
+      listInventoryUsage(),
       listVendorPayments(),
       listExpenses(),
       listCategories(),
@@ -518,12 +596,16 @@ async function getBootstrap() {
   const todaySales = salesHistory.filter((sale) => sale.saleDate === todayDate).reduce((sum, sale) => sum + sale.total, 0);
   const todayExpenses = expenses.filter((expense) => expense.expenseDate === todayDate).reduce((sum, expense) => sum + expense.amount, 0);
   const vendorDues = vendors.reduce((sum, vendor) => sum + vendor.pending, 0);
+  const todayAttendance = employeeAttendance.filter((record) => record.attendanceDate === todayDate);
+  const presentCount = todayAttendance.length
+    ? todayAttendance.filter((record) => record.status === "Present").length
+    : employees.filter((employee) => employee.status === "Present").length;
 
   return {
     dashboard: {
       todaySales,
       todayExpenses,
-      presentCount: employees.filter((employee) => employee.status === "Present").length,
+      presentCount,
       totalStaff: employees.length,
       vendorDues,
       dueVendors: vendors.filter((vendor) => vendor.pending > 0).length,
@@ -537,13 +619,14 @@ async function getBootstrap() {
     finishedStock: products,
     vendors,
     vendorPurchases,
+    inventoryUsage,
     vendorPayments,
     expenses,
     categories,
     products,
-    employeeAttendance: [],
+    employeeAttendance,
     employeePayments: [],
-    stockHistory: [],
+    stockHistory: inventoryUsage,
     salesHistory,
     users,
     permissions,
@@ -567,6 +650,86 @@ async function vendorNameForPayment(body) {
     if (rows[0]?.name) return rows[0].name;
   }
   return "Vendor";
+}
+
+async function findRawStockByName(name) {
+  const rows = await query("SELECT * FROM raw_stock WHERE LOWER(name) = LOWER(?) LIMIT 1", [text(name)]);
+  return rows[0] ? mapRawStock(rows[0]) : null;
+}
+
+async function ensureCategory(type, name) {
+  const categoryName = text(name);
+  if (!categoryName) return null;
+  const categoryType = text(type, "Raw Material");
+  const existing = await query(
+    "SELECT * FROM categories WHERE LOWER(type) = LOWER(?) AND LOWER(name) = LOWER(?) LIMIT 1",
+    [categoryType, categoryName]
+  );
+  if (existing[0]) return mapCategory(existing[0]);
+  const result = await exec("INSERT INTO categories (type, name, items, margin) VALUES (?, ?, ?, ?)", [
+    categoryType,
+    categoryName,
+    0,
+    "Auto",
+  ]);
+  return findOne(listCategories, result.insertId);
+}
+
+async function ensureRawStockFromMaterial({ itemName, category, unit, rate }) {
+  const materialName = text(itemName, "Item");
+  const existing = await findRawStockByName(materialName);
+  if (existing) return existing;
+  await ensureCategory("Raw Material", category);
+  const result = await exec(
+    `INSERT INTO raw_stock (name, category, stock, unit, minimum_stock, rate, in_today, out_today, wastage)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [materialName, text(category), 0, text(unit, "kg"), 0, number(rate), 0, 0, 0]
+  );
+  return findOne(listRawStock, result.insertId);
+}
+
+async function adjustRawStock(materialId, delta, movement = {}) {
+  if (!materialId || !Number(delta || 0)) return;
+  await exec(
+    `UPDATE raw_stock
+     SET stock = GREATEST(0, stock + ?),
+         in_today = GREATEST(0, in_today + ?),
+         out_today = GREATEST(0, out_today + ?),
+         wastage = GREATEST(0, wastage + ?)
+     WHERE id = ?`,
+    [
+      number(delta),
+      number(movement.inToday),
+      number(movement.outToday),
+      number(movement.wastage),
+      materialId,
+    ]
+  );
+}
+
+async function materialForInventoryMovement(record) {
+  return ensureRawStockFromMaterial({
+    itemName: record.itemName || record.materialName,
+    category: record.category,
+    unit: record.unit,
+    rate: record.rate,
+  });
+}
+
+async function materialForUsage(record) {
+  if (record.materialId) {
+    const material = await findOne(listRawStock, record.materialId);
+    if (material) return material;
+  }
+  return ensureRawStockFromMaterial({
+    itemName: record.materialName,
+    category: record.category,
+    unit: record.unit,
+  });
+}
+
+function usageStockDelta(record) {
+  return -(number(record.usedQty) + number(record.wastageQty));
 }
 
 async function respondWithBootstrap(res, key, record, status = 200) {
@@ -648,8 +811,53 @@ app.delete("/api/employees/:id", asyncHandler(async (req, res) => {
   await respondWithBootstrap(res, "employee", { id: req.params.id });
 }));
 
+app.post("/api/attendance", asyncHandler(async (req, res) => {
+  const body = req.body || {};
+  const attendanceDate = body.attendanceDate || body.date || today();
+  const status = text(body.status, "Present");
+  const employeeIds = Array.isArray(body.employeeIds)
+    ? body.employeeIds.map((id) => String(id)).filter(Boolean)
+    : [];
+
+  if (!employeeIds.length) {
+    await respondWithBootstrap(res, "employeeAttendance", [], 201);
+    return;
+  }
+
+  const placeholders = employeeIds.map(() => "?").join(",");
+  const employeeRows = await query(`SELECT * FROM employees WHERE id IN (${placeholders})`, employeeIds);
+  const checkIn = nullableText(body.checkIn);
+  const checkOut = nullableText(body.checkOut);
+  const notes = nullableText(body.notes);
+
+  for (const row of employeeRows) {
+    await exec(
+      `INSERT INTO employee_attendance
+        (employee_id, employee_name, attendance_date, status, check_in, check_out, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+        employee_name = VALUES(employee_name),
+        status = VALUES(status),
+        check_in = VALUES(check_in),
+        check_out = VALUES(check_out),
+        notes = VALUES(notes)`,
+      [row.id, row.name, attendanceDate, status, checkIn, checkOut, notes]
+    );
+  }
+
+  if (attendanceDate === today() && employeeRows.length) {
+    await exec(`UPDATE employees SET status = ? WHERE id IN (${placeholders})`, [status, ...employeeIds]);
+  }
+
+  const attendance = (await listEmployeeAttendance()).filter(
+    (record) => record.attendanceDate === attendanceDate && employeeIds.includes(String(record.employeeId))
+  );
+  await respondWithBootstrap(res, "employeeAttendance", attendance, 201);
+}));
+
 app.post("/api/raw-stock", asyncHandler(async (req, res) => {
   const body = req.body || {};
+  await ensureCategory("Raw Material", body.category);
   const result = await exec(
     `INSERT INTO raw_stock (name, category, stock, unit, minimum_stock, rate, in_today, out_today, wastage)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -671,6 +879,7 @@ app.post("/api/raw-stock", asyncHandler(async (req, res) => {
 
 app.put("/api/raw-stock/:id", asyncHandler(async (req, res) => {
   const body = req.body || {};
+  await ensureCategory("Raw Material", body.category);
   await exec(
     `UPDATE raw_stock
      SET name = ?, category = ?, stock = ?, unit = ?, minimum_stock = ?, rate = ?, in_today = ?, out_today = ?, wastage = ?
@@ -724,6 +933,7 @@ app.delete("/api/products/:id", asyncHandler(async (req, res) => {
 
 app.post("/api/vendors", asyncHandler(async (req, res) => {
   const body = req.body || {};
+  await ensureCategory("Vendor", body.category);
   const result = await exec(
     "INSERT INTO vendors (name, category, contact) VALUES (?, ?, ?)",
     [text(body.name, "Vendor"), text(body.category), text(body.contact)]
@@ -736,6 +946,7 @@ app.post("/api/vendors", asyncHandler(async (req, res) => {
 
 app.put("/api/vendors/:id", asyncHandler(async (req, res) => {
   const body = req.body || {};
+  await ensureCategory("Vendor", body.category);
   await exec(
     "UPDATE vendors SET name = ?, category = ?, contact = ? WHERE id = ?",
     [text(body.name, "Vendor"), text(body.category), text(body.contact), req.params.id]
@@ -754,6 +965,13 @@ app.delete("/api/vendors/:id", asyncHandler(async (req, res) => {
 app.post("/api/vendor-purchases", asyncHandler(async (req, res) => {
   const body = req.body || {};
   const amount = number(body.amount, number(body.qty) * number(body.rate));
+  await ensureCategory("Vendor", body.category);
+  const material = await materialForInventoryMovement({
+    itemName: body.itemName,
+    category: body.category,
+    unit: body.unit,
+    rate: body.rate,
+  });
   const result = await exec(
     `INSERT INTO vendor_purchases
       (vendor_id, vendor_name, purchase_date, item_name, category, qty, unit, rate, amount, paid, mode, notes)
@@ -773,6 +991,7 @@ app.post("/api/vendor-purchases", asyncHandler(async (req, res) => {
       nullableText(body.notes),
     ]
   );
+  await adjustRawStock(material.id, number(body.qty), { inToday: number(body.qty) });
   const vendorPurchase = (await listVendorPurchases()).find((item) => String(item.id) === String(result.insertId));
   await respondWithBootstrap(res, "vendorPurchase", vendorPurchase, 201);
 }));
@@ -780,6 +999,18 @@ app.post("/api/vendor-purchases", asyncHandler(async (req, res) => {
 app.put("/api/vendor-purchases/:id", asyncHandler(async (req, res) => {
   const body = req.body || {};
   const amount = number(body.amount, number(body.qty) * number(body.rate));
+  const existing = await findOne(listVendorPurchases, req.params.id);
+  if (existing) {
+    const previousMaterial = await materialForInventoryMovement(existing);
+    await adjustRawStock(previousMaterial.id, -number(existing.qty), { inToday: -number(existing.qty) });
+  }
+  await ensureCategory("Vendor", body.category);
+  const material = await materialForInventoryMovement({
+    itemName: body.itemName,
+    category: body.category,
+    unit: body.unit,
+    rate: body.rate,
+  });
   await exec(
     `UPDATE vendor_purchases
      SET vendor_id = ?, vendor_name = ?, purchase_date = ?, item_name = ?, category = ?,
@@ -801,13 +1032,130 @@ app.put("/api/vendor-purchases/:id", asyncHandler(async (req, res) => {
       req.params.id,
     ]
   );
+  await adjustRawStock(material.id, number(body.qty), { inToday: number(body.qty) });
   const vendorPurchase = (await listVendorPurchases()).find((item) => String(item.id) === String(req.params.id));
   await respondWithBootstrap(res, "vendorPurchase", vendorPurchase);
 }));
 
 app.delete("/api/vendor-purchases/:id", asyncHandler(async (req, res) => {
+  const existing = await findOne(listVendorPurchases, req.params.id);
+  if (existing) {
+    const material = await materialForInventoryMovement(existing);
+    await adjustRawStock(material.id, -number(existing.qty), { inToday: -number(existing.qty) });
+  }
   await exec("DELETE FROM vendor_purchases WHERE id = ?", [req.params.id]);
   await respondWithBootstrap(res, "vendorPurchase", { id: req.params.id });
+}));
+
+app.post("/api/inventory-usage", asyncHandler(async (req, res) => {
+  const body = req.body || {};
+  const material = await materialForUsage({
+    materialId: body.materialId,
+    materialName: body.materialName || body.name,
+    category: body.category,
+    unit: body.unit,
+  });
+  const record = {
+    materialId: material.id,
+    materialName: material.name,
+    category: body.category || material.category,
+    usageDate: body.usageDate || body.date || today(),
+    usedQty: number(body.usedQty),
+    unusedQty: number(body.unusedQty),
+    wastageQty: number(body.wastageQty),
+    unit: body.unit || material.unit,
+    notes: text(body.notes),
+  };
+  await ensureCategory("Raw Material", record.category);
+  const result = await exec(
+    `INSERT INTO inventory_usage
+      (material_id, material_name, category, usage_date, used_qty, unused_qty, wastage_qty, unit, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      record.materialId,
+      record.materialName,
+      text(record.category),
+      record.usageDate,
+      record.usedQty,
+      record.unusedQty,
+      record.wastageQty,
+      text(record.unit, "kg"),
+      nullableText(record.notes),
+    ]
+  );
+  await adjustRawStock(record.materialId, usageStockDelta(record), {
+    outToday: record.usedQty,
+    wastage: record.wastageQty,
+  });
+  const usage = await findOne(listInventoryUsage, result.insertId);
+  await respondWithBootstrap(res, "inventoryUsage", usage, 201);
+}));
+
+app.put("/api/inventory-usage/:id", asyncHandler(async (req, res) => {
+  const body = req.body || {};
+  const existing = await findOne(listInventoryUsage, req.params.id);
+  if (existing) {
+    const previousMaterial = await materialForUsage(existing);
+    await adjustRawStock(previousMaterial.id, -usageStockDelta(existing), {
+      outToday: -number(existing.usedQty),
+      wastage: -number(existing.wastageQty),
+    });
+  }
+  const material = await materialForUsage({
+    materialId: body.materialId,
+    materialName: body.materialName || body.name,
+    category: body.category,
+    unit: body.unit,
+  });
+  const record = {
+    materialId: material.id,
+    materialName: material.name,
+    category: body.category || material.category,
+    usageDate: body.usageDate || body.date || today(),
+    usedQty: number(body.usedQty),
+    unusedQty: number(body.unusedQty),
+    wastageQty: number(body.wastageQty),
+    unit: body.unit || material.unit,
+    notes: text(body.notes),
+  };
+  await ensureCategory("Raw Material", record.category);
+  await exec(
+    `UPDATE inventory_usage
+     SET material_id = ?, material_name = ?, category = ?, usage_date = ?,
+         used_qty = ?, unused_qty = ?, wastage_qty = ?, unit = ?, notes = ?
+     WHERE id = ?`,
+    [
+      record.materialId,
+      record.materialName,
+      text(record.category),
+      record.usageDate,
+      record.usedQty,
+      record.unusedQty,
+      record.wastageQty,
+      text(record.unit, "kg"),
+      nullableText(record.notes),
+      req.params.id,
+    ]
+  );
+  await adjustRawStock(record.materialId, usageStockDelta(record), {
+    outToday: record.usedQty,
+    wastage: record.wastageQty,
+  });
+  const usage = await findOne(listInventoryUsage, req.params.id);
+  await respondWithBootstrap(res, "inventoryUsage", usage);
+}));
+
+app.delete("/api/inventory-usage/:id", asyncHandler(async (req, res) => {
+  const existing = await findOne(listInventoryUsage, req.params.id);
+  if (existing) {
+    const material = await materialForUsage(existing);
+    await adjustRawStock(material.id, -usageStockDelta(existing), {
+      outToday: -number(existing.usedQty),
+      wastage: -number(existing.wastageQty),
+    });
+  }
+  await exec("DELETE FROM inventory_usage WHERE id = ?", [req.params.id]);
+  await respondWithBootstrap(res, "inventoryUsage", { id: req.params.id });
 }));
 
 app.post("/api/vendor-payments", asyncHandler(async (req, res) => {
@@ -871,11 +1219,19 @@ app.delete("/api/expenses/:id", asyncHandler(async (req, res) => {
 
 app.post("/api/categories", asyncHandler(async (req, res) => {
   const body = req.body || {};
-  const result = await exec(
-    "INSERT INTO categories (type, name, items, margin) VALUES (?, ?, ?, ?)",
-    [text(body.type, "Product"), text(body.name, "Category"), number(body.items), text(body.margin, "New")]
+  const categoryType = text(body.type, "Product");
+  const categoryName = text(body.name, "Category");
+  await exec(
+    `INSERT INTO categories (type, name, items, margin)
+     VALUES (?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+      items = VALUES(items),
+      margin = VALUES(margin)`,
+    [categoryType, categoryName, number(body.items), text(body.margin, "New")]
   );
-  const category = (await listCategories()).find((item) => String(item.id) === String(result.insertId));
+  const category = (await listCategories()).find(
+    (item) => item.type.toLowerCase() === categoryType.toLowerCase() && item.name.toLowerCase() === categoryName.toLowerCase()
+  );
   await respondWithBootstrap(res, "category", category, 201);
 }));
 

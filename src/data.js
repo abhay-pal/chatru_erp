@@ -18,6 +18,7 @@ export const navGroups = [
     items: [
       { key: "sales-slip", label: "Sales Slip", icon: "ReceiptIndianRupee" },
       { key: "inventory", label: "Inventory", icon: "PackageSearch" },
+      { key: "inventory-usage", label: "Inventory Usage", icon: "PackageSearch" },
       { key: "vendor-payment", label: "Vendor Payment", icon: "WalletCards" },
       { key: "daily-vendors", label: "Daily Vendors", icon: "Truck" },
     ],

@@ -79,6 +79,11 @@ Maida,Flour,50,kg,10,38
 Sugar,Sweetener,80,kg,20,44
 Ghee,Dairy,25,kg,5,620
 `;
+const EMPLOYEE_CSV_COLUMNS = ["name", "role", "contact", "address", "aadhaar", "joining", "salary", "shiftStart", "shiftEnd"];
+const EMPLOYEE_DEMO_CSV = `${EMPLOYEE_CSV_COLUMNS.join(",")}
+Ramesh,Karigar,+91 98765 43210,Muzaffarnagar,1234 5678 9012,2026-09-01,18000,09:00:00,21:00:00
+Suresh,Counter,+91 98765 43211,Muzaffarnagar,2234 5678 9012,2026-09-05,15000,09:00:00,21:00:00
+`;
 const ROLE_OPTIONS = [
   { value: "admin", label: "Admin" },
   { value: "manager", label: "Manager" },
@@ -164,6 +169,29 @@ function downloadTextFile(filename, content, type = "text/csv") {
   URL.revokeObjectURL(url);
 }
 
+function escapeCsvValue(value) {
+  const textValue = String(value ?? "");
+  return /[",\n]/.test(textValue) ? `"${textValue.replace(/"/g, '""')}"` : textValue;
+}
+
+function recordsToCsv(columns, records) {
+  const header = columns.join(",");
+  const body = records
+    .map((record) => columns.map((column) => escapeCsvValue(record[column])).join(","))
+    .join("\n");
+  return `${header}\n${body}\n`;
+}
+
+function matchesSearch(searchTerm, values) {
+  const query = String(searchTerm || "").trim().toLowerCase();
+  if (!query) return true;
+  return values
+    .map((value) => String(value ?? ""))
+    .join(" ")
+    .toLowerCase()
+    .includes(query);
+}
+
 function normalizeEmployee(employee, index = 0) {
   const id = employee.id || employee.employeeCode || `EMP-${String(index + 1).padStart(3, "0")}`;
   const contact = employee.contact ?? employee.phone ?? "-";
@@ -184,6 +212,8 @@ function normalizeEmployee(employee, index = 0) {
     address: employee.address || "-",
     aadhaar: aadhaar || "-",
     aadhaarCard: employee.aadhaarCard || (aadhaar === "-" ? "" : aadhaar),
+    shiftStart: employee.shiftStart || "09:00:00",
+    shiftEnd: employee.shiftEnd || "21:00:00",
     status: employee.status || "Absent",
   };
 }
@@ -269,6 +299,34 @@ function normalizeVendorPurchase(item, index = 0) {
     paid,
     pending: Number(item.pending ?? Math.max(0, amount - paid)),
     mode: item.mode || "Cash",
+    notes: item.notes || "",
+  };
+}
+
+function normalizeInventoryUsage(item, index = 0) {
+  return {
+    id: String(item.id || `USG-${index + 1}`),
+    materialId: item.materialId ? String(item.materialId) : "",
+    materialName: item.materialName || item.material || item.name || "",
+    category: item.category || "",
+    usageDate: item.usageDate || item.date || today(),
+    usedQty: Number(item.usedQty || item.used || 0),
+    unusedQty: Number(item.unusedQty || item.unused || 0),
+    wastageQty: Number(item.wastageQty || item.wastage || 0),
+    unit: item.unit || "kg",
+    notes: item.notes || "",
+  };
+}
+
+function normalizeEmployeeAttendance(item, index = 0) {
+  return {
+    id: String(item.id || `ATT-${index + 1}`),
+    employeeId: item.employeeId ? String(item.employeeId) : "",
+    employeeName: item.employeeName || item.name || "Employee",
+    attendanceDate: item.attendanceDate || item.date || today(),
+    status: item.status || "Absent",
+    checkIn: item.checkIn || "",
+    checkOut: item.checkOut || "",
     notes: item.notes || "",
   };
 }
@@ -478,11 +536,14 @@ export default function App() {
   const [productRows, setProductRows] = useState([]);
   const [vendorRows, setVendorRows] = useState([]);
   const [vendorPurchaseRows, setVendorPurchaseRows] = useState([]);
+  const [inventoryUsageRows, setInventoryUsageRows] = useState([]);
+  const [employeeAttendanceRows, setEmployeeAttendanceRows] = useState([]);
   const [vendorPaymentRows, setVendorPaymentRows] = useState([]);
   const [expenseRows, setExpenseRows] = useState([]);
   const [categoryRows, setCategoryRows] = useState([]);
   const [userRows, setUserRows] = useState([]);
   const [permissionRows, setPermissionRows] = useState([]);
+  const [searchTerm, setSearchTerm] = useState("");
 
   useEffect(() => {
     listSalesBills().then((records) => {
@@ -502,6 +563,8 @@ export default function App() {
     if (data.products) setProductRows(data.products.map(normalizeProduct));
     if (data.vendors) setVendorRows(data.vendors.map(normalizeVendor));
     if (data.vendorPurchases) setVendorPurchaseRows(data.vendorPurchases.map(normalizeVendorPurchase));
+    if (data.inventoryUsage || data.stockHistory) setInventoryUsageRows((data.inventoryUsage || data.stockHistory).map(normalizeInventoryUsage));
+    if (data.employeeAttendance) setEmployeeAttendanceRows(data.employeeAttendance.map(normalizeEmployeeAttendance));
     if (data.vendorPayments) setVendorPaymentRows(data.vendorPayments.map(normalizeVendorPayment));
     if (data.expenses) setExpenseRows(data.expenses.map(normalizeExpense));
     if (data.categories) setCategoryRows(data.categories.map(normalizeCategory));
@@ -892,6 +955,100 @@ export default function App() {
     return { ...result, id: String(purchaseId) };
   }
 
+  function toInventoryUsagePayload(usage) {
+    const record = normalizeInventoryUsage(usage);
+    const selectedMaterial =
+      materialRows.find((material) => material.id === record.materialId) ||
+      materialRows.find((material) => material.name === record.materialName);
+
+    return {
+      materialId: selectedMaterial?.id ? Number(selectedMaterial.id) : undefined,
+      materialName: selectedMaterial?.name || record.materialName,
+      category: record.category || selectedMaterial?.category || "",
+      usageDate: record.usageDate,
+      usedQty: record.usedQty,
+      unusedQty: record.unusedQty,
+      wastageQty: record.wastageQty,
+      unit: record.unit || selectedMaterial?.unit || "kg",
+      notes: record.notes,
+    };
+  }
+
+  async function persistInventoryUsage(usage) {
+    const record = normalizeInventoryUsage({ ...usage, id: `USG-${Date.now()}` });
+    const result = await createBusinessRecord("/api/inventory-usage", toInventoryUsagePayload(record));
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setInventoryUsageRows((records) => [record, ...records]);
+    }
+    return { ...result, record };
+  }
+
+  async function updateInventoryUsage(usage) {
+    const record = normalizeInventoryUsage(usage);
+    const result = await updateBusinessRecord(`/api/inventory-usage/${record.id}`, toInventoryUsagePayload(record));
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setInventoryUsageRows((records) => records.map((item) => (item.id === record.id ? record : item)));
+    }
+    return { ...result, record };
+  }
+
+  async function deleteInventoryUsage(usageId) {
+    const result = await deleteBusinessRecord(`/api/inventory-usage/${usageId}`);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setInventoryUsageRows((records) => records.filter((item) => item.id !== String(usageId)));
+    }
+    return { ...result, id: String(usageId) };
+  }
+
+  async function saveAttendanceBatch(attendance) {
+    const payload = {
+      date: attendance.date || attendance.attendanceDate || today(),
+      status: attendance.status || "Present",
+      checkIn: attendance.checkIn || "",
+      checkOut: attendance.checkOut || "",
+      notes: attendance.notes || "",
+      employeeIds: attendance.employeeIds || [],
+    };
+    const result = await createBusinessRecord("/api/attendance", payload);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      const selectedIds = new Set(payload.employeeIds.map(String));
+      const localRows = staff
+        .filter((employee) => selectedIds.has(employee.id))
+        .map((employee, index) =>
+          normalizeEmployeeAttendance({
+            id: `ATT-${payload.date}-${employee.id}`,
+            employeeId: employee.id,
+            employeeName: employee.name,
+            attendanceDate: payload.date,
+            status: payload.status,
+            checkIn: payload.checkIn,
+            checkOut: payload.checkOut,
+            notes: payload.notes,
+          }, index)
+        );
+      setEmployeeAttendanceRows((records) => [
+        ...localRows,
+        ...records.filter(
+          (record) => !(record.attendanceDate === payload.date && selectedIds.has(record.employeeId))
+        ),
+      ]);
+      if (payload.date === today()) {
+        setStaff((records) =>
+          records.map((employee) => (selectedIds.has(employee.id) ? { ...employee, status: payload.status } : employee))
+        );
+      }
+    }
+    return result;
+  }
+
   async function persistExpense(expense) {
     const record = normalizeExpense({ ...expense, id: `EXP-${Date.now()}` });
     const payload = {
@@ -1068,10 +1225,19 @@ export default function App() {
   }
 
   return (
-    <Shell user={session} route={visibleRoute} onRoute={setRoute} onLogout={logout} permissionRows={permissionRows}>
+    <Shell
+      user={session}
+      route={visibleRoute}
+      onRoute={setRoute}
+      onLogout={logout}
+      permissionRows={permissionRows}
+      searchTerm={searchTerm}
+      onSearch={setSearchTerm}
+    >
       <RouteView
         route={visibleRoute}
         onRoute={setRoute}
+        searchTerm={searchTerm}
         session={session}
         permissionRows={permissionRows}
         staff={staff}
@@ -1080,6 +1246,8 @@ export default function App() {
         productRows={productRows}
         vendorRows={dynamicVendorRows}
         vendorPurchaseRows={dynamicVendorPurchaseRows}
+        inventoryUsageRows={inventoryUsageRows}
+        employeeAttendanceRows={employeeAttendanceRows}
         vendorPaymentRows={vendorPaymentRows}
         expenseRows={expenseRows}
         categoryRows={categoryRows}
@@ -1106,6 +1274,10 @@ export default function App() {
         onSaveVendorPurchase={persistVendorPurchase}
         onUpdateVendorPurchase={updateVendorPurchase}
         onDeleteVendorPurchase={deleteVendorPurchase}
+        onSaveInventoryUsage={persistInventoryUsage}
+        onUpdateInventoryUsage={updateInventoryUsage}
+        onDeleteInventoryUsage={deleteInventoryUsage}
+        onSaveAttendance={saveAttendanceBatch}
         onSaveExpense={persistExpense}
         onUpdateExpense={updateExpense}
         onDeleteExpense={deleteExpense}
@@ -1177,7 +1349,7 @@ function LoginPage({ onLogin }) {
   );
 }
 
-function Shell({ user, route, onRoute, onLogout, permissionRows, children }) {
+function Shell({ user, route, onRoute, onLogout, permissionRows, searchTerm, onSearch, children }) {
   const [open, setOpen] = useState(false);
   const clock = useClock();
   const visibleGroups = navGroups
@@ -1245,7 +1417,12 @@ function Shell({ user, route, onRoute, onLogout, permissionRows, children }) {
           </div>
           <div className="search-pill">
             <Search size={17} />
-            <input type="search" placeholder="Search bills, vendors, stock" />
+            <input
+              type="search"
+              value={searchTerm}
+              placeholder="Search bills, vendors, stock"
+              onChange={(event) => onSearch(event.target.value)}
+            />
           </div>
           <div className="top-actions">
             <button className="icon-button" type="button" aria-label="Notifications">
@@ -1272,12 +1449,15 @@ function Shell({ user, route, onRoute, onLogout, permissionRows, children }) {
 function RouteView({
   route,
   onRoute,
+  searchTerm,
   staff,
   employeeStatus,
   materialRows,
   productRows,
   vendorRows,
   vendorPurchaseRows,
+  inventoryUsageRows,
+  employeeAttendanceRows,
   vendorPaymentRows,
   expenseRows,
   categoryRows,
@@ -1305,6 +1485,10 @@ function RouteView({
   onSaveVendorPurchase,
   onUpdateVendorPurchase,
   onDeleteVendorPurchase,
+  onSaveInventoryUsage,
+  onUpdateInventoryUsage,
+  onDeleteInventoryUsage,
+  onSaveAttendance,
   onSaveExpense,
   onUpdateExpense,
   onDeleteExpense,
@@ -1324,6 +1508,7 @@ function RouteView({
         materialRows={materialRows}
         vendorRows={vendorRows}
         expenseRows={expenseRows}
+        attendanceRows={employeeAttendanceRows}
         onStartBill={() => onRoute("sales-slip")}
       />
     );
@@ -1340,20 +1525,36 @@ function RouteView({
     );
   }
   if (route === "sales-slip") {
-    return <SalesSlipPage bills={salesBills} status={salesStatus} productRows={productRows} onSaveBill={onSaveBill} />;
+    return <SalesSlipPage bills={salesBills} status={salesStatus} productRows={productRows} onSaveBill={onSaveBill} globalSearch={searchTerm} />;
   }
   if (route === "inventory") {
     return (
       <InventoryPage
         materialRows={materialRows}
         productRows={productRows}
+        categoryRows={categoryRows}
         onSaveMaterial={onSaveMaterial}
         onUpdateMaterial={onUpdateMaterial}
         onDeleteMaterial={onDeleteMaterial}
         onUpdateMaterialStock={onUpdateMaterialStock}
+        onSaveCategory={onSaveCategory}
         onSaveProduct={onSaveProduct}
         onUpdateProduct={onUpdateProduct}
         onDeleteProduct={onDeleteProduct}
+        globalSearch={searchTerm}
+      />
+    );
+  }
+  if (route === "inventory-usage") {
+    return (
+      <InventoryUsagePage
+        materialRows={materialRows}
+        usageRows={inventoryUsageRows}
+        categoryRows={categoryRows}
+        onSaveUsage={onSaveInventoryUsage}
+        onUpdateUsage={onUpdateInventoryUsage}
+        onDeleteUsage={onDeleteInventoryUsage}
+        globalSearch={searchTerm}
       />
     );
   }
@@ -1367,6 +1568,7 @@ function RouteView({
         onUpdateVendorPayment={onUpdateVendorPayment}
         onDeleteVendorPayment={onDeleteVendorPayment}
         onUpdatePurchase={onUpdateVendorPurchase}
+        globalSearch={searchTerm}
       />
     );
   }
@@ -1383,6 +1585,7 @@ function RouteView({
         onSavePurchase={onSaveVendorPurchase}
         onUpdatePurchase={onUpdateVendorPurchase}
         onDeletePurchase={onDeleteVendorPurchase}
+        globalSearch={searchTerm}
       />
     );
   }
@@ -1391,20 +1594,24 @@ function RouteView({
       <EmployeesPage
         staff={staff}
         status={employeeStatus}
+        attendanceRows={employeeAttendanceRows}
         onSaveEmployee={onSaveEmployee}
         onUpdateEmployee={onUpdateEmployee}
         onDeleteEmployee={onDeleteEmployee}
+        globalSearch={searchTerm}
       />
     );
   }
-  if (route === "attendance") return <AttendancePage staff={staff} />;
+  if (route === "attendance") return <AttendancePage staff={staff} attendanceRows={employeeAttendanceRows} onSaveAttendance={onSaveAttendance} globalSearch={searchTerm} />;
   if (route === "vendors") {
     return (
       <VendorsPage
         vendorRows={vendorRows}
+        categoryRows={categoryRows}
         onSaveVendor={onSaveVendor}
         onUpdateVendor={onUpdateVendor}
         onDeleteVendor={onDeleteVendor}
+        globalSearch={searchTerm}
       />
     );
   }
@@ -1415,6 +1622,7 @@ function RouteView({
         onSaveExpense={onSaveExpense}
         onUpdateExpense={onUpdateExpense}
         onDeleteExpense={onDeleteExpense}
+        globalSearch={searchTerm}
       />
     );
   }
@@ -1429,6 +1637,7 @@ function RouteView({
         onSaveMaterial={onSaveMaterial}
         onUpdateMaterial={onUpdateMaterial}
         onDeleteMaterial={onDeleteMaterial}
+        globalSearch={searchTerm}
       />
     );
   }
@@ -1441,17 +1650,24 @@ function RouteView({
         onUpdateUser={onUpdateUser}
         onDeleteUser={onDeleteUser}
         onSavePermission={onSavePermission}
+        globalSearch={searchTerm}
       />
     );
   }
   return null;
 }
 
-function OperationsDashboard({ salesBills, staff, materialRows, vendorRows, expenseRows, onStartBill }) {
+function OperationsDashboard({ salesBills, staff, materialRows, vendorRows, expenseRows, attendanceRows, onStartBill }) {
   const todaysSales = totalForDate(salesBills, today());
   const totalExpenses = expenseRows.reduce((sum, item) => sum + item.amount, 0);
   const vendorDues = vendorRows.reduce((sum, item) => sum + item.pending, 0);
   const lowStockRows = materialRows.filter((material) => material.stock <= material.min);
+  const todayAttendance = attendanceRows.filter((record) => record.attendanceDate === today());
+  const todayAttendanceByEmployee = new Map(todayAttendance.map((record) => [record.employeeId, record]));
+  const presentCount = todayAttendance.length
+    ? todayAttendance.filter((record) => record.status === "Present").length
+    : staff.filter((employee) => employee.status === "Present").length;
+  const absentCount = Math.max(0, staff.length - presentCount);
   const inventoryReady = materialRows.length
     ? Math.round(((materialRows.length - lowStockRows.length) / materialRows.length) * 100)
     : 0;
@@ -1462,7 +1678,7 @@ function OperationsDashboard({ salesBills, staff, materialRows, vendorRows, expe
         items={[
           ["Today's sales", money(todaysSales), "Today"],
           ["Today's expenses", money(totalExpenses), "Today"],
-          ["Staff present", `0 / ${staff.length}`, `${staff.length} absent`],
+          ["Staff present", `${presentCount} / ${staff.length}`, `${absentCount} absent`],
           ["Vendor dues", money(vendorDues), `${vendorRows.length} vendors`],
         ]}
       />
@@ -1501,7 +1717,11 @@ function OperationsDashboard({ salesBills, staff, materialRows, vendorRows, expe
       <Panel title="Attendance" subtitle="Staff today">
         <DataTable
           columns={["Name", "Role", "Status"]}
-          rows={staff.map((employee) => [employee.name, employee.role, employee.status || "Absent"])}
+          rows={staff.map((employee) => [
+            employee.name,
+            employee.role,
+            todayAttendanceByEmployee.get(employee.id)?.status || employee.status || "Absent",
+          ])}
         />
       </Panel>
     </Page>
@@ -1562,7 +1782,7 @@ function FinanceDashboard({ salesBills, staff, expenseRows, vendorRows, vendorPu
   );
 }
 
-function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
+function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = "" }) {
   const saleProducts = productRows;
   const [items, setItems] = useState([]);
   const [shouldSeedItem, setShouldSeedItem] = useState(true);
@@ -1588,7 +1808,17 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
   const subtotal = rows.reduce((sum, item) => sum + item.total, 0);
   const tax = gst ? (subtotal - discount) * 0.05 : 0;
   const total = Math.max(0, subtotal - Number(discount || 0) + tax);
-  const filteredBills = bills.filter((bill) => !historyDate || bill.date === historyDate);
+  const filteredBills = bills.filter(
+    (bill) =>
+      (!historyDate || bill.date === historyDate) &&
+      matchesSearch(globalSearch, [
+        bill.billNo,
+        bill.date,
+        bill.mode,
+        bill.total,
+        ...(bill.items || []).map((item) => item.product),
+      ])
+  );
   const dailySalesReport = useMemo(() => {
     const byDate = new Map();
     bills.forEach((bill) => {
@@ -1899,13 +2129,16 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
 function InventoryPage({
   materialRows,
   productRows,
+  categoryRows = [],
   onSaveMaterial,
   onUpdateMaterial,
   onDeleteMaterial,
   onUpdateMaterialStock,
+  onSaveCategory = async () => null,
   onSaveProduct,
   onUpdateProduct,
   onDeleteProduct,
+  globalSearch = "",
 }) {
   const csvInputRef = useRef(null);
   const [modalMode, setModalMode] = useState(null);
@@ -1934,6 +2167,32 @@ function InventoryPage({
   });
   const [message, setMessage] = useState("");
   const [importingCsv, setImportingCsv] = useState(false);
+  const rawMaterialCategoryOptions = useMemo(
+    () =>
+      uniqueValues([
+        ...categoryRows
+          .filter((category) => category.type.toLowerCase() === "raw material")
+          .map((category) => category.name),
+        ...materialRows.map((material) => material.category),
+      ]),
+    [categoryRows, materialRows]
+  );
+  const productCategoryOptions = useMemo(
+    () =>
+      uniqueValues([
+        ...categoryRows
+          .filter((category) => category.type.toLowerCase() === "product")
+          .map((category) => category.name),
+        ...productRows.map((product) => product.category),
+      ]),
+    [categoryRows, productRows]
+  );
+  const filteredMaterialRows = materialRows.filter((material) =>
+    matchesSearch(globalSearch, [material.name, material.category, material.unit, material.rate, material.stock])
+  );
+  const filteredProductRows = productRows.filter((product) =>
+    matchesSearch(globalSearch, [product.name, product.category, product.unit, product.rate, product.sku])
+  );
 
   useEffect(() => {
     const selected = materialRows.find((material) => material.id === stockForm.id) || materialRows[0];
@@ -2024,6 +2283,19 @@ function InventoryPage({
       }
 
       const existingByName = new Map(materialRows.map((material) => [material.name.trim().toLowerCase(), material]));
+      const existingCategories = new Set(
+        categoryRows
+          .filter((category) => category.type.toLowerCase() === "raw material")
+          .map((category) => category.name.trim().toLowerCase())
+      );
+      const importCategories = uniqueValues(uniqueRows.map((record) => record.category));
+      for (const category of importCategories) {
+        const key = category.trim().toLowerCase();
+        if (!existingCategories.has(key)) {
+          await onSaveCategory({ type: "Raw Material", name: category });
+          existingCategories.add(key);
+        }
+      }
       let updated = 0;
       let created = 0;
 
@@ -2113,7 +2385,7 @@ function InventoryPage({
         </div>
         <DataTable
           columns={["Material", "Category", "Stock", "In", "Out", "Wastage", "Action"]}
-          rows={materialRows.map((material) => [
+          rows={filteredMaterialRows.map((material) => [
             material.name,
             material.category,
             `${material.stock} ${material.unit} / Min ${material.min}`,
@@ -2129,7 +2401,7 @@ function InventoryPage({
       </Panel>
       <Panel title="Finished goods" subtitle="Ready stock" action="Add product" onAction={() => openProductForm()}>
         <div className="product-grid">
-          {productRows.map((product) => (
+          {filteredProductRows.map((product) => (
             <article key={product.name}>
               <span>{product.category.toUpperCase()}</span>
               <strong>{product.name}</strong>
@@ -2146,7 +2418,16 @@ function InventoryPage({
         <Modal title={materialForm.id ? "Edit raw material" : "Add raw material"} eyebrow="Inventory record" onClose={() => setModalMode(null)}>
           <form className="modal-form grid-form" onSubmit={submitMaterial}>
             <label className="field"><span>Name</span><input required value={materialForm.name} onChange={(event) => setMaterialForm({ ...materialForm, name: event.target.value })} /></label>
-            <label className="field"><span>Category</span><input value={materialForm.category} onChange={(event) => setMaterialForm({ ...materialForm, category: event.target.value })} /></label>
+            <label className="field">
+              <span>Category</span>
+              <select
+                value={materialForm.category}
+                onChange={(event) => setMaterialForm({ ...materialForm, category: event.target.value })}
+              >
+                <option value="">Select category</option>
+                {uniqueValues([...rawMaterialCategoryOptions, materialForm.category]).map((category) => <option key={category} value={category}>{category}</option>)}
+              </select>
+            </label>
             <button className="action-button full" type="submit">{materialForm.id ? "Update raw material" : "Save raw material"}</button>
           </form>
         </Modal>
@@ -2179,14 +2460,208 @@ function InventoryPage({
           <form className="modal-form grid-form" onSubmit={submitProduct}>
             <label className="field"><span>SKU</span><input value={productForm.sku} onChange={(event) => setProductForm({ ...productForm, sku: event.target.value })} /></label>
             <label className="field"><span>Name</span><input required value={productForm.name} onChange={(event) => setProductForm({ ...productForm, name: event.target.value })} /></label>
-            <label className="field"><span>Category</span><input value={productForm.category} onChange={(event) => setProductForm({ ...productForm, category: event.target.value })} /></label>
-            <label className="field"><span>Unit</span><input value={productForm.unit} onChange={(event) => setProductForm({ ...productForm, unit: event.target.value })} /></label>
+            <label className="field">
+              <span>Category</span>
+              <select value={productForm.category} onChange={(event) => setProductForm({ ...productForm, category: event.target.value })}>
+                <option value="">Select category</option>
+                {uniqueValues([...productCategoryOptions, productForm.category]).map((category) => <option key={category} value={category}>{category}</option>)}
+              </select>
+            </label>
+            <label className="field"><span>Unit</span><select value={productForm.unit} onChange={(event) => setProductForm({ ...productForm, unit: event.target.value })}>{uniqueValues([productForm.unit, ...UNIT_OPTIONS]).map((unit) => <option key={unit} value={unit}>{unit}</option>)}</select></label>
             <label className="field"><span>Rate</span><input type="number" value={productForm.rate} onChange={(event) => setProductForm({ ...productForm, rate: event.target.value })} /></label>
             <label className="field"><span>GST %</span><input type="number" value={productForm.taxRate} onChange={(event) => setProductForm({ ...productForm, taxRate: event.target.value })} /></label>
             <button className="action-button full" type="submit">{productForm.id ? "Update product" : "Save product"}</button>
           </form>
         </Modal>
       )}
+    </Page>
+  );
+}
+
+function InventoryUsagePage({
+  materialRows,
+  usageRows,
+  onSaveUsage,
+  onUpdateUsage,
+  onDeleteUsage,
+  globalSearch = "",
+}) {
+  const [form, setForm] = useState(() => ({
+    usageDate: today(),
+    materialId: materialRows[0]?.id || "",
+    materialName: materialRows[0]?.name || "",
+    category: materialRows[0]?.category || "",
+    usedQty: 0,
+    unusedQty: materialRows[0]?.stock || 0,
+    wastageQty: 0,
+    unit: materialRows[0]?.unit || "kg",
+    notes: "",
+  }));
+  const [editingId, setEditingId] = useState("");
+  const [message, setMessage] = useState("");
+  const selectedMaterial =
+    materialRows.find((material) => material.id === form.materialId) ||
+    materialRows.find((material) => material.name === form.materialName);
+  const filteredUsageRows = usageRows.filter((usage) =>
+    matchesSearch(globalSearch, [
+      usage.materialName,
+      usage.category,
+      usage.usageDate,
+      usage.usedQty,
+      usage.unusedQty,
+      usage.wastageQty,
+      usage.unit,
+      usage.notes,
+    ])
+  );
+
+  useEffect(() => {
+    if (!form.materialId && materialRows[0]) {
+      const first = materialRows[0];
+      setForm((current) => ({
+        ...current,
+        materialId: first.id,
+        materialName: first.name,
+        category: first.category,
+        unusedQty: first.stock,
+        unit: first.unit,
+      }));
+    }
+  }, [form.materialId, materialRows]);
+
+  function changeMaterial(materialId) {
+    const material = materialRows.find((item) => item.id === materialId);
+    if (!material) return;
+    const usedQty = Number(form.usedQty || 0);
+    const wastageQty = Number(form.wastageQty || 0);
+    setForm({
+      ...form,
+      materialId: material.id,
+      materialName: material.name,
+      category: material.category,
+      unit: material.unit,
+      unusedQty: Math.max(0, Number(material.stock || 0) - usedQty - wastageQty),
+    });
+  }
+
+  function updateUsageQuantity(field, value) {
+    const next = { ...form, [field]: value };
+    const stock = Number(selectedMaterial?.stock || 0);
+    const usedQty = Number(field === "usedQty" ? value : next.usedQty || 0);
+    const wastageQty = Number(field === "wastageQty" ? value : next.wastageQty || 0);
+    next.unusedQty = Math.max(0, stock - usedQty - wastageQty);
+    setForm(next);
+  }
+
+  async function submitUsage(event) {
+    event.preventDefault();
+    if (!form.materialName) {
+      setMessage("Select raw material before saving usage");
+      return;
+    }
+    const payload = {
+      ...form,
+      usedQty: Number(form.usedQty || 0),
+      unusedQty: Number(form.unusedQty || 0),
+      wastageQty: Number(form.wastageQty || 0),
+    };
+    if (editingId) {
+      await onUpdateUsage({ ...payload, id: editingId });
+      setMessage("Inventory usage updated");
+      setEditingId("");
+    } else {
+      await onSaveUsage(payload);
+      setMessage("Inventory usage saved");
+    }
+    resetUsage();
+  }
+
+  function editUsage(usage) {
+    setEditingId(usage.id);
+    setForm({
+      usageDate: usage.usageDate,
+      materialId: usage.materialId,
+      materialName: usage.materialName,
+      category: usage.category,
+      usedQty: usage.usedQty,
+      unusedQty: usage.unusedQty,
+      wastageQty: usage.wastageQty,
+      unit: usage.unit,
+      notes: usage.notes,
+    });
+    setMessage("Editing inventory usage");
+  }
+
+  function resetUsage() {
+    const first = materialRows[0];
+    setForm({
+      usageDate: today(),
+      materialId: first?.id || "",
+      materialName: first?.name || "",
+      category: first?.category || "",
+      usedQty: 0,
+      unusedQty: first?.stock || 0,
+      wastageQty: 0,
+      unit: first?.unit || "kg",
+      notes: "",
+    });
+  }
+
+  function cancelEdit() {
+    setEditingId("");
+    resetUsage();
+    setMessage("");
+  }
+
+  async function removeUsage(usage) {
+    if (!window.confirm(`Delete usage for ${usage.materialName}?`)) return;
+    await onDeleteUsage(usage.id);
+    setMessage("Inventory usage deleted");
+    if (editingId === usage.id) cancelEdit();
+  }
+
+  return (
+    <Page>
+      <Panel title="Inventory usage" subtitle="Used, unused, and wastage">
+        {message && <p className="db-message">{message}</p>}
+        <form className="form-grid purchase-form" onSubmit={submitUsage}>
+          <label>DATE<input type="date" value={form.usageDate} onChange={(event) => setForm({ ...form, usageDate: event.target.value })} /></label>
+          <label>
+            RAW MATERIAL
+            <select value={form.materialId} onChange={(event) => changeMaterial(event.target.value)}>
+              <option value="">Select material</option>
+              {materialRows.map((material) => <option key={material.id} value={material.id}>{material.name}</option>)}
+            </select>
+          </label>
+          <label>CATEGORY<input value={form.category} readOnly /></label>
+          <label>AVAILABLE<input value={`${quantity(selectedMaterial?.stock || 0)} ${form.unit}`} readOnly /></label>
+          <label>USED<input type="number" min="0" step="0.01" value={form.usedQty} onChange={(event) => updateUsageQuantity("usedQty", event.target.value)} /></label>
+          <label>UNUSED<input type="number" min="0" step="0.01" value={form.unusedQty} onChange={(event) => setForm({ ...form, unusedQty: event.target.value })} /></label>
+          <label>WASTAGE<input type="number" min="0" step="0.01" value={form.wastageQty} onChange={(event) => updateUsageQuantity("wastageQty", event.target.value)} /></label>
+          <label>UNIT<input value={form.unit} readOnly /></label>
+          <label className="full">NOTES<input value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} /></label>
+          <div className="button-row full">
+            <button className="action-button full" type="submit">{editingId ? "Update usage" : "Save usage"}</button>
+            {editingId && <button className="ghost-button" type="button" onClick={cancelEdit}>Cancel edit</button>}
+          </div>
+        </form>
+      </Panel>
+      <Panel title="Usage history" subtitle="Inventory movement">
+        <DataTable
+          columns={["Date", "Material", "Category", "Used", "Unused", "Wastage", "Notes", "Action"]}
+          rows={filteredUsageRows.map((usage) => [
+            usage.usageDate,
+            usage.materialName,
+            usage.category,
+            `${quantity(usage.usedQty)} ${usage.unit}`,
+            `${quantity(usage.unusedQty)} ${usage.unit}`,
+            `${quantity(usage.wastageQty)} ${usage.unit}`,
+            usage.notes || "-",
+            <RowActions onEdit={() => editUsage(usage)} onDelete={() => removeUsage(usage)} />,
+          ])}
+          empty="No inventory usage found"
+        />
+      </Panel>
     </Page>
   );
 }
@@ -2199,6 +2674,7 @@ function VendorPaymentPage({
   onUpdateVendorPayment,
   onDeleteVendorPayment,
   onUpdatePurchase,
+  globalSearch = "",
 }) {
   const [vendorId, setVendorId] = useState(vendorRows[3]?.id || vendorRows[0]?.id || "");
   const [amount, setAmount] = useState(0);
@@ -2223,8 +2699,19 @@ function VendorPaymentPage({
           };
         })
         .filter((purchase) => purchase.pending > 0)
+        .filter((purchase) =>
+          matchesSearch(globalSearch, [
+            purchase.vendor,
+            purchase.material,
+            purchase.category,
+            purchase.date,
+            purchase.amount,
+            purchase.paid,
+            purchase.pending,
+          ])
+        )
         .sort((a, b) => `${b.date}${b.id}`.localeCompare(`${a.date}${a.id}`)),
-    [purchaseRows]
+    [globalSearch, purchaseRows]
   );
   const selectedDueEntries = useMemo(
     () => pendingEntries.filter((entry) => selectedDueIds.includes(entry.id)),
@@ -2547,7 +3034,11 @@ function VendorPaymentPage({
       <Panel title="Payment history" subtitle="Vendor payment records">
         <DataTable
           columns={["Date", "Vendor", "Mode", "Amount", "Notes", "Action"]}
-          rows={paymentRows.map((payment) => [
+          rows={paymentRows
+            .filter((payment) =>
+              matchesSearch(globalSearch, [payment.paymentDate, payment.vendorName, payment.mode, payment.amount, payment.notes])
+            )
+            .map((payment) => [
             payment.paymentDate,
             payment.vendorName,
             payment.mode,
@@ -2576,20 +3067,32 @@ function DailyVendorsPage({
   onSavePurchase,
   onUpdatePurchase,
   onDeletePurchase,
+  globalSearch = "",
 }) {
   const formRef = useRef(null);
   const vendorOptions = useMemo(() => vendorRows, [vendorRows]);
   const materialOptions = useMemo(() => materialRows, [materialRows]);
-  const categoryOptions = useMemo(
+  const rawMaterialCategoryOptions = useMemo(
     () =>
       uniqueValues([
         ...categoryRows
-          .filter((category) => ["raw material", "vendor"].includes(category.type.toLowerCase()))
+          .filter((category) => category.type.toLowerCase() === "raw material")
           .map((category) => category.name),
         ...materialOptions.map((item) => item.category),
-        ...vendorOptions.map((vendor) => vendor.category),
       ]),
     [categoryRows, materialOptions, vendorOptions]
+  );
+  const vendorCategoryOptions = useMemo(
+    () =>
+      uniqueValues([
+        ...categoryRows.map((category) => category.name),
+        ...vendorOptions.map((vendor) => vendor.category),
+      ]),
+    [categoryRows, vendorOptions]
+  );
+  const categoryOptions = useMemo(
+    () => uniqueValues([...rawMaterialCategoryOptions, ...vendorCategoryOptions]),
+    [rawMaterialCategoryOptions, vendorCategoryOptions]
   );
   const [dateFilter, setDateFilter] = useState(today());
   const [modalMode, setModalMode] = useState(null);
@@ -2607,20 +3110,33 @@ function DailyVendorsPage({
     mode: "Cash",
     notes: "",
   });
+  const selectedCategoryKey = form.category.trim().toLowerCase();
+  const vendorMatchesCategory = (vendor, categoryKey = selectedCategoryKey) =>
+    !categoryKey || vendor.category.trim().toLowerCase() === categoryKey;
+  const materialMatchesCategory = (material, categoryKey = selectedCategoryKey) =>
+    !categoryKey || material.category.trim().toLowerCase() === categoryKey;
+  const vendorsByCategory = useMemo(
+    () => vendorOptions.filter((vendor) => vendorMatchesCategory(vendor)),
+    [selectedCategoryKey, vendorOptions]
+  );
+  const materialsByCategory = useMemo(
+    () => materialOptions.filter((material) => materialMatchesCategory(material)),
+    [selectedCategoryKey, materialOptions]
+  );
   const vendorSelectOptions = useMemo(() => {
-    const options = [...vendorOptions];
+    const options = [...vendorsByCategory];
     if (form.vendor && !options.some((vendor) => vendor.name === form.vendor)) {
       options.unshift({ id: `current-${form.vendor}`, name: form.vendor, category: form.category });
     }
     return options;
-  }, [form.category, form.vendor, vendorOptions]);
+  }, [form.category, form.vendor, vendorsByCategory]);
   const materialSelectOptions = useMemo(() => {
-    const options = [...materialOptions];
+    const options = [...materialsByCategory];
     if (form.material && !options.some((material) => material.name === form.material)) {
       options.unshift({ id: `current-${form.material}`, name: form.material, category: form.category, unit: form.unit, rate: form.rate });
     }
     return options;
-  }, [form.category, form.material, form.rate, form.unit, materialOptions]);
+  }, [form.category, form.material, form.rate, form.unit, materialsByCategory]);
   const unitOptions = useMemo(
     () => uniqueValues([form.unit, ...materialOptions.map((item) => item.unit), ...UNIT_OPTIONS]),
     [form.unit, materialOptions]
@@ -2716,7 +3232,21 @@ function DailyVendorsPage({
       setModalMode("vendor");
       return;
     }
-    setForm({ ...form, vendor: value });
+    const selected = vendorOptions.find((vendor) => vendor.name === value);
+    const nextCategory = selected?.category || form.category;
+    const currentMaterial = materialOptions.find((material) => material.name === form.material);
+    const materialStillMatches = currentMaterial && materialMatchesCategory(currentMaterial, nextCategory.trim().toLowerCase());
+    const nextMaterial = materialStillMatches
+      ? currentMaterial
+      : materialOptions.find((material) => materialMatchesCategory(material, nextCategory.trim().toLowerCase()));
+    setForm({
+      ...form,
+      vendor: value,
+      category: nextCategory,
+      material: nextMaterial?.name || "",
+      unit: nextMaterial?.unit || form.unit,
+      rate: nextMaterial?.rate ?? form.rate,
+    });
   }
 
   function changeCategory(value) {
@@ -2725,7 +3255,23 @@ function DailyVendorsPage({
       setModalMode("category");
       return;
     }
-    setForm({ ...form, category: value });
+    const categoryKey = value.trim().toLowerCase();
+    const currentVendor = vendorOptions.find((vendor) => vendor.name === form.vendor);
+    const currentMaterial = materialOptions.find((material) => material.name === form.material);
+    const nextVendor = currentVendor && vendorMatchesCategory(currentVendor, categoryKey)
+      ? currentVendor
+      : vendorOptions.find((vendor) => vendorMatchesCategory(vendor, categoryKey));
+    const nextMaterial = currentMaterial && materialMatchesCategory(currentMaterial, categoryKey)
+      ? currentMaterial
+      : materialOptions.find((material) => materialMatchesCategory(material, categoryKey));
+    setForm({
+      ...form,
+      category: value,
+      vendor: nextVendor?.name || "",
+      material: nextMaterial?.name || "",
+      unit: nextMaterial?.unit || form.unit,
+      rate: nextMaterial?.rate ?? form.rate,
+    });
   }
 
   function changeMaterial(value) {
@@ -2797,7 +3343,22 @@ function DailyVendorsPage({
     setModalMode(null);
   }
 
-  const filtered = purchaseRows.filter((record) => !dateFilter || record.date === dateFilter);
+  const filtered = purchaseRows.filter(
+    (record) =>
+      (!dateFilter || record.date === dateFilter) &&
+      matchesSearch(globalSearch, [
+        record.date,
+        record.vendor,
+        record.material,
+        record.category,
+        record.qty,
+        record.unit,
+        record.rate,
+        record.amount,
+        record.paid,
+        record.pending,
+      ])
+  );
 
   return (
     <Page>
@@ -2851,7 +3412,7 @@ function DailyVendorsPage({
         <Modal title="Add vendor" eyebrow="Daily vendor" onClose={() => setModalMode(null)}>
           <form className="modal-form grid-form" onSubmit={submitQuickVendor}>
             <label className="field"><span>Vendor name</span><input required value={vendorForm.name} onChange={(event) => setVendorForm({ ...vendorForm, name: event.target.value })} /></label>
-            <label className="field"><span>Category</span><select value={vendorForm.category} onChange={(event) => setVendorForm({ ...vendorForm, category: event.target.value })}><option value="">Select category</option>{uniqueValues([...categoryOptions, vendorForm.category]).map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+            <label className="field"><span>Category</span><select value={vendorForm.category} onChange={(event) => setVendorForm({ ...vendorForm, category: event.target.value })}><option value="">Select category</option>{uniqueValues([...vendorCategoryOptions, vendorForm.category]).map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
             <label className="field full"><span>Contact</span><input value={vendorForm.contact} onChange={(event) => setVendorForm({ ...vendorForm, contact: event.target.value })} /></label>
             <button className="action-button full" type="submit">Save vendor</button>
           </form>
@@ -2870,7 +3431,7 @@ function DailyVendorsPage({
         <Modal title="Add raw material" eyebrow="Daily vendor" onClose={() => setModalMode(null)}>
           <form className="modal-form grid-form" onSubmit={submitQuickMaterial}>
             <label className="field"><span>Name</span><input required value={materialForm.name} onChange={(event) => setMaterialForm({ ...materialForm, name: event.target.value })} /></label>
-            <label className="field"><span>Category</span><select value={materialForm.category} onChange={(event) => setMaterialForm({ ...materialForm, category: event.target.value })}><option value="">Select category</option>{uniqueValues([...categoryOptions, materialForm.category]).map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+            <label className="field"><span>Category</span><select value={materialForm.category} onChange={(event) => setMaterialForm({ ...materialForm, category: event.target.value })}><option value="">Select category</option>{uniqueValues([...rawMaterialCategoryOptions, materialForm.category]).map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
             <button className="action-button full" type="submit">Save raw material</button>
           </form>
         </Modal>
@@ -2879,7 +3440,16 @@ function DailyVendorsPage({
   );
 }
 
-function EmployeesPage({ staff, status, onSaveEmployee, onUpdateEmployee, onDeleteEmployee }) {
+function EmployeesPage({
+  staff,
+  status,
+  attendanceRows = [],
+  onSaveEmployee,
+  onUpdateEmployee,
+  onDeleteEmployee,
+  globalSearch = "",
+}) {
+  const csvInputRef = useRef(null);
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(staff[0]?.id || "");
   const [showForm, setShowForm] = useState(false);
@@ -2887,12 +3457,26 @@ function EmployeesPage({ staff, status, onSaveEmployee, onUpdateEmployee, onDele
   const [editingId, setEditingId] = useState("");
   const [salaryMonth, setSalaryMonth] = useState(today().slice(0, 7));
   const [saving, setSaving] = useState(false);
+  const [importingCsv, setImportingCsv] = useState(false);
   const [message, setMessage] = useState(status);
   const selected = staff.find((employee) => employee.id === selectedId) || staff[0];
+  const effectiveSearch = query.trim() || globalSearch;
   const filtered = staff.filter((employee) =>
-    `${employee.name} ${employee.role} ${employee.contact}`.toLowerCase().includes(query.toLowerCase())
+    matchesSearch(effectiveSearch, [employee.name, employee.role, employee.contact, employee.address, employee.joining])
   );
-  const attendanceRows = [];
+  const selectedAttendanceRows = selected
+    ? attendanceRows
+        .filter((row) => row.employeeId === selected.id && row.attendanceDate.startsWith(salaryMonth))
+        .sort((a, b) => b.attendanceDate.localeCompare(a.attendanceDate))
+    : [];
+  const presentDays = selectedAttendanceRows.filter((row) => row.status === "Present").length;
+  const absentDays = selectedAttendanceRows.filter((row) => row.status === "Absent").length;
+  const leaveDays = selectedAttendanceRows.filter((row) => row.status === "Leave").length;
+  const halfDays = selectedAttendanceRows.filter((row) => row.status === "Half Day").length;
+  const attendanceCount = selectedAttendanceRows.length;
+  const salaryDays = attendanceCount || 30;
+  const payableRatio = attendanceCount ? (presentDays + halfDays * 0.5) / salaryDays : 1;
+  const earnedSalary = selected ? Math.round(Number(selected.salary || 0) * payableRatio) : 0;
   const salaryRows = [];
 
   useEffect(() => {
@@ -2968,6 +3552,75 @@ function EmployeesPage({ staff, status, onSaveEmployee, onUpdateEmployee, onDele
     setMessage("Employee removed");
   }
 
+  function normalizeEmployeeImportRow(row, index = 0) {
+    return normalizeEmployee({
+      name: row.name || row.employee || "",
+      role: row.role || "Karigar",
+      contact: row.contact || row.phone || "",
+      phone: row.phone || row.contact || "",
+      address: row.address || "",
+      aadhaar: row.aadhaar || row.aadhaar_card || row.aadhaarcard || "",
+      aadhaarCard: row.aadhaar_card || row.aadhaarcard || row.aadhaar || "",
+      joining: row.joining || row.joining_date || row.joiningdate || today(),
+      joiningDate: row.joining_date || row.joiningdate || row.joining || today(),
+      salary: row.salary || row.monthly_salary || row.monthlysalary || 0,
+      shiftStart: row.shiftstart || row.shift_start || "09:00:00",
+      shiftEnd: row.shiftend || row.shift_end || "21:00:00",
+      status: row.status || "Absent",
+    }, index);
+  }
+
+  async function importEmployeeCsv(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setImportingCsv(true);
+    try {
+      const importedRows = csvToRecords(await file.text())
+        .map((row, index) => normalizeEmployeeImportRow(row, index))
+        .filter((employee) => employee.name.trim());
+      const uniqueRows = Array.from(
+        new Map(importedRows.map((employee) => [employee.name.trim().toLowerCase(), employee])).values()
+      );
+      const existingByName = new Map(staff.map((employee) => [employee.name.trim().toLowerCase(), employee]));
+      let created = 0;
+      let updated = 0;
+
+      for (const employee of uniqueRows) {
+        const existing = existingByName.get(employee.name.trim().toLowerCase());
+        if (existing) {
+          await onUpdateEmployee({ ...existing, ...employee, id: existing.id });
+          updated += 1;
+        } else {
+          await onSaveEmployee(employee);
+          created += 1;
+        }
+      }
+
+      if (uniqueRows[0]) setSelectedId(uniqueRows[0].id);
+      setMessage(`Imported ${uniqueRows.length} employees (${created} new, ${updated} updated)`);
+    } catch {
+      setMessage("Employee CSV import failed. Check the headings and values.");
+    } finally {
+      setImportingCsv(false);
+      event.target.value = "";
+    }
+  }
+
+  function exportEmployeesCsv() {
+    const records = staff.map((employee) => ({
+      name: employee.name,
+      role: employee.role,
+      contact: employee.contact === "-" ? "" : employee.contact,
+      address: employee.address === "-" ? "" : employee.address,
+      aadhaar: employee.aadhaar === "-" ? "" : employee.aadhaar,
+      joining: employee.joining,
+      salary: employee.salary,
+      shiftStart: employee.shiftStart || "09:00:00",
+      shiftEnd: employee.shiftEnd || "21:00:00",
+    }));
+    downloadTextFile("employees-export.csv", recordsToCsv(EMPLOYEE_CSV_COLUMNS, records));
+  }
+
   return (
     <Page>
       <section className="grid employee-grid">
@@ -2977,10 +3630,25 @@ function EmployeesPage({ staff, status, onSaveEmployee, onUpdateEmployee, onDele
               <span>EMPLOYEE MANAGEMENT</span>
               <h2>Profiles and salary</h2>
             </div>
-            <button className="action-button" type="button" onClick={() => openEmployeeForm()}>
-              <Plus size={17} />
-              Add employee
-            </button>
+            <div className="button-row">
+              <input ref={csvInputRef} type="file" accept=".csv,text/csv" onChange={importEmployeeCsv} hidden />
+              <button className="ghost-button" type="button" onClick={() => csvInputRef.current?.click()} disabled={importingCsv}>
+                <Upload size={16} />
+                {importingCsv ? "Importing..." : "Import CSV"}
+              </button>
+              <button className="ghost-button" type="button" onClick={exportEmployeesCsv} disabled={!staff.length}>
+                <Download size={16} />
+                Export CSV
+              </button>
+              <button className="ghost-button" type="button" onClick={() => downloadTextFile("employee-demo.csv", EMPLOYEE_DEMO_CSV)}>
+                <Download size={16} />
+                Demo CSV
+              </button>
+              <button className="action-button" type="button" onClick={() => openEmployeeForm()}>
+                <Plus size={17} />
+                Add employee
+              </button>
+            </div>
           </div>
           <label className="inline-search">
             <Search size={17} />
@@ -3036,8 +3704,8 @@ function EmployeesPage({ staff, status, onSaveEmployee, onUpdateEmployee, onDele
               <div className="employee-payroll-grid">
                 <article>
                   <span>Attendance</span>
-                  <strong>30 / 30</strong>
-                  <small>P 0 | A 0 | L 0</small>
+                  <strong>{presentDays} / {salaryDays}</strong>
+                  <small>P {presentDays} | A {absentDays} | L {leaveDays} | H {halfDays}</small>
                 </article>
                 <article>
                   <span>Total salary</span>
@@ -3046,7 +3714,7 @@ function EmployeesPage({ staff, status, onSaveEmployee, onUpdateEmployee, onDele
                 </article>
                 <article>
                   <span>Earned salary</span>
-                  <strong>{money(selected.salary)}</strong>
+                  <strong>{money(earnedSalary)}</strong>
                   <small>After leave and absent</small>
                 </article>
                 <article>
@@ -3056,7 +3724,7 @@ function EmployeesPage({ staff, status, onSaveEmployee, onUpdateEmployee, onDele
                 </article>
                 <article>
                   <span>Payable</span>
-                  <strong>{money(selected.salary)}</strong>
+                  <strong>{money(earnedSalary)}</strong>
                   <small>Earned - paid</small>
                 </article>
                 <label className="salary-month-control">
@@ -3068,11 +3736,11 @@ function EmployeesPage({ staff, status, onSaveEmployee, onUpdateEmployee, onDele
                 <h3>Attendance history</h3>
                 <DataTable
                   columns={["Date", "Status", "In", "Out"]}
-                  rows={attendanceRows.map(([day, rowStatus, inTime, outTime]) => [
-                    day,
-                    <span className="status-badge">{rowStatus}</span>,
-                    inTime,
-                    outTime,
+                  rows={selectedAttendanceRows.map((row) => [
+                    row.attendanceDate,
+                    <span className="status-badge">{row.status}</span>,
+                    row.checkIn || "-",
+                    row.checkOut || "-",
                   ])}
                   empty="No attendance records found"
                 />
@@ -3132,9 +3800,20 @@ function EmployeesPage({ staff, status, onSaveEmployee, onUpdateEmployee, onDele
   );
 }
 
-function AttendancePage({ staff }) {
+function AttendancePage({ staff, attendanceRows = [], onSaveAttendance, globalSearch = "" }) {
   const [selectedIds, setSelectedIds] = useState([]);
+  const [date, setDate] = useState(today());
+  const [status, setStatus] = useState("Present");
+  const [checkIn, setCheckIn] = useState("09:00");
+  const [checkOut, setCheckOut] = useState("");
+  const [filterDate, setFilterDate] = useState(today());
+  const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const filteredAttendanceRows = attendanceRows.filter(
+    (row) =>
+      (!filterDate || row.attendanceDate === filterDate) &&
+      matchesSearch(globalSearch, [row.attendanceDate, row.employeeName, row.status, row.checkIn, row.checkOut, row.notes])
+  );
 
   useEffect(() => {
     setSelectedIds(staff.map((employee) => employee.id));
@@ -3146,43 +3825,95 @@ function AttendancePage({ staff }) {
     );
   }
 
+  async function saveAttendance(event) {
+    event.preventDefault();
+    if (!selectedIds.length) {
+      setMessage("Select employees before updating attendance");
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSaveAttendance({ date, status, checkIn, checkOut, employeeIds: selectedIds });
+      setFilterDate(date);
+      setMessage(`Attendance updated for ${selectedIds.length} employee${selectedIds.length === 1 ? "" : "s"}`);
+    } catch {
+      setMessage("Attendance update failed. Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <Page>
       <Panel title="Attendance" subtitle="Batch update attendance" action="Clear all" onAction={() => setSelectedIds([])}>
-        <div className="form-grid">
-          <label>DATE<input type="date" defaultValue={today()} /></label>
-          <label>STATUS<select><option>Present</option><option>Absent</option><option>Half Day</option><option>Leave</option></select></label>
-          <label>CHECK IN<input type="time" defaultValue="09:00" /></label>
-          <label>CHECK OUT<input type="time" /></label>
-        </div>
-        <div className="attendance-checks">
-          {staff.map((employee) => (
-            <label key={employee.id}>
-              <input type="checkbox" checked={selectedIds.includes(employee.id)} onChange={() => toggleEmployee(employee.id)} />
-              <span>{employee.name}</span>
-              <small>{employee.role}</small>
-            </label>
-          ))}
-        </div>
-        {message && <p className="db-message">{message}</p>}
-        <button className="action-button full" type="button" onClick={() => setMessage(`Attendance updated for ${selectedIds.length} employee`)}>
-          Update {selectedIds.length} employee
-        </button>
+        <form onSubmit={saveAttendance}>
+          <div className="form-grid">
+            <label>DATE<input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
+            <label>STATUS<select value={status} onChange={(event) => setStatus(event.target.value)}><option>Present</option><option>Absent</option><option>Half Day</option><option>Leave</option></select></label>
+            <label>CHECK IN<input type="time" value={checkIn} onChange={(event) => setCheckIn(event.target.value)} /></label>
+            <label>CHECK OUT<input type="time" value={checkOut} onChange={(event) => setCheckOut(event.target.value)} /></label>
+          </div>
+          <div className="attendance-checks">
+            {staff.map((employee) => (
+              <label key={employee.id}>
+                <input type="checkbox" checked={selectedIds.includes(employee.id)} onChange={() => toggleEmployee(employee.id)} />
+                <span>{employee.name}</span>
+                <small>{employee.role}</small>
+              </label>
+            ))}
+          </div>
+          {message && <p className="db-message">{message}</p>}
+          <button className="action-button full" type="submit" disabled={saving}>
+            {saving ? "Updating..." : `Update ${selectedIds.length} employee${selectedIds.length === 1 ? "" : "s"}`}
+          </button>
+        </form>
       </Panel>
       <Panel title="Filter wise" subtitle="Attendance report">
-        <DataTable columns={["Date", "Employee", "Status", "In", "Out"]} rows={[]} empty="No attendance for selected filter" />
+        <div className="filter-row">
+          <label>DATE<input type="date" value={filterDate} onChange={(event) => setFilterDate(event.target.value)} /></label>
+          <button className="ghost-button" type="button" onClick={() => setFilterDate("")}>All dates</button>
+        </div>
+        <DataTable
+          columns={["Date", "Employee", "Status", "In", "Out"]}
+          rows={filteredAttendanceRows.map((row) => [
+            row.attendanceDate,
+            row.employeeName,
+            <span className="status-badge">{row.status}</span>,
+            row.checkIn || "-",
+            row.checkOut || "-",
+          ])}
+          empty="No attendance for selected filter"
+        />
       </Panel>
     </Page>
   );
 }
 
-function VendorsPage({ vendorRows, onSaveVendor, onUpdateVendor, onDeleteVendor }) {
+function VendorsPage({ vendorRows, categoryRows, onSaveVendor, onUpdateVendor, onDeleteVendor, globalSearch = "" }) {
+  const categoryOptions = useMemo(
+    () =>
+      uniqueValues([
+        ...categoryRows.map((category) => category.name),
+        ...vendorRows.map((vendor) => vendor.category),
+      ]),
+    [categoryRows, vendorRows]
+  );
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: "", category: "", contact: "" });
   const [message, setMessage] = useState("");
+  const filteredVendorRows = vendorRows.filter((vendor) =>
+    matchesSearch(globalSearch, [
+      vendor.name,
+      vendor.category,
+      vendor.contact,
+      vendor.purchases,
+      vendor.pending,
+      vendor.lastPaid,
+    ])
+  );
 
   function openVendorForm(vendor = null) {
-    setForm(vendor ? { ...vendor } : { name: "", category: "", contact: "" });
+    setForm(vendor ? { ...vendor } : { name: "", category: categoryOptions[0] || "", contact: "" });
     setShowForm(true);
   }
 
@@ -3206,7 +3937,7 @@ function VendorsPage({ vendorRows, onSaveVendor, onUpdateVendor, onDeleteVendor 
         {message && <p className="db-message">{message}</p>}
         <DataTable
           columns={["Vendor", "Category", "Contact", "Purchases", "Pending", "Last paid", "Action"]}
-          rows={vendorRows.map((vendor) => [
+          rows={filteredVendorRows.map((vendor) => [
             vendor.name,
             vendor.category,
             vendor.contact,
@@ -3224,7 +3955,7 @@ function VendorsPage({ vendorRows, onSaveVendor, onUpdateVendor, onDeleteVendor 
         <Modal title={form.id ? "Edit vendor" : "Add vendor"} eyebrow="Vendor record" onClose={() => setShowForm(false)}>
           <form className="modal-form grid-form" onSubmit={submitVendor}>
             <label className="field"><span>Vendor name</span><input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
-            <label className="field"><span>Category</span><input value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} /></label>
+            <label className="field"><span>Category</span><select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}><option value="">Select category</option>{uniqueValues([...categoryOptions, form.category]).map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
             <label className="field full"><span>Contact</span><input value={form.contact} onChange={(event) => setForm({ ...form, contact: event.target.value })} /></label>
             <button className="action-button full" type="submit">{form.id ? "Update vendor" : "Save vendor"}</button>
           </form>
@@ -3234,12 +3965,16 @@ function VendorsPage({ vendorRows, onSaveVendor, onUpdateVendor, onDeleteVendor 
   );
 }
 
-function ExpensesPage({ expenseRows, onSaveExpense, onUpdateExpense, onDeleteExpense }) {
+function ExpensesPage({ expenseRows, onSaveExpense, onUpdateExpense, onDeleteExpense, globalSearch = "" }) {
   const [dateFilter, setDateFilter] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ expenseDate: today(), label: "", category: "", mode: "Cash", amount: 0 });
   const [message, setMessage] = useState("");
-  const filtered = expenseRows.filter((expense) => !dateFilter || expense.date === dateFilter);
+  const filtered = expenseRows.filter(
+    (expense) =>
+      (!dateFilter || expense.date === dateFilter) &&
+      matchesSearch(globalSearch, [expense.date, expense.title, expense.label, expense.category, expense.mode, expense.amount])
+  );
   const total = filtered.reduce((sum, expense) => sum + expense.amount, 0);
 
   function openExpenseForm(expense = null) {
@@ -3316,6 +4051,7 @@ function CategoriesPage({
   onSaveMaterial,
   onUpdateMaterial,
   onDeleteMaterial,
+  globalSearch = "",
 }) {
   const rawMaterialCategoryOptions = useMemo(
     () =>
@@ -3344,6 +4080,12 @@ function CategoriesPage({
     rate: 0,
   });
   const [message, setMessage] = useState("");
+  const filteredCategoryRows = categoryRows.filter((category) =>
+    matchesSearch(globalSearch, [category.type, category.name, category.items, category.margin])
+  );
+  const filteredMaterialRows = materialRows.filter((material) =>
+    matchesSearch(globalSearch, [material.name, material.category, material.unit, material.rate, material.stock])
+  );
 
   function openCategoryForm(category = null) {
     setCategoryForm(category ? { ...category } : { type: "Product", name: "" });
@@ -3434,7 +4176,7 @@ function CategoriesPage({
         {activeTab === "categories" ? (
           <DataTable
             columns={["Type", "Name"]}
-            rows={categoryRows.map((category) => [
+            rows={filteredCategoryRows.map((category) => [
               category.type,
               <CellWithActions label={category.name}>
                 <RowActions
@@ -3448,7 +4190,7 @@ function CategoriesPage({
         ) : (
           <DataTable
             columns={["Raw material", "Category"]}
-            rows={materialRows.map((material) => [
+            rows={filteredMaterialRows.map((material) => [
               material.name,
               <CellWithActions label={material.category}>
                 <RowActions
@@ -3498,11 +4240,14 @@ function CategoriesPage({
   );
 }
 
-function UsersPage({ userRows, permissionRows, onSaveUser, onUpdateUser, onDeleteUser, onSavePermission }) {
+function UsersPage({ userRows, permissionRows, onSaveUser, onUpdateUser, onDeleteUser, onSavePermission, globalSearch = "" }) {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ username: "", password: "", name: "", role: "accountant", status: "Active" });
   const [selectedRole, setSelectedRole] = useState("admin");
   const [message, setMessage] = useState("");
+  const filteredUserRows = userRows.filter((user) =>
+    matchesSearch(globalSearch, [user.username, user.name, user.role, user.status])
+  );
   const roleOptions = useMemo(() => {
     const roles = uniqueValues([...ROLE_OPTIONS.map((role) => role.value), ...userRows.map((user) => user.role)]);
     return roles.map((role) => ({ value: role, label: roleLabel(role) }));
@@ -3548,7 +4293,7 @@ function UsersPage({ userRows, permissionRows, onSaveUser, onUpdateUser, onDelet
         {message && <p className="db-message">{message}</p>}
         <DataTable
           columns={["User", "Name", "Role", "Status", "Action"]}
-          rows={userRows.map((user) => [
+          rows={filteredUserRows.map((user) => [
             user.username,
             user.name,
             roleLabel(user.role),

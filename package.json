@@ -3,6 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "packageManager": "npm@10.9.3",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "dev:server": "node server.js",
