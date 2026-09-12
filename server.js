@@ -524,6 +524,16 @@ async function findOne(listFn, id) {
   return records.find((record) => String(record.id) === String(id));
 }
 
+async function vendorNameForPayment(body) {
+  const providedName = text(body.vendorName || body.vendor);
+  if (providedName) return providedName;
+  if (body.vendorId) {
+    const rows = await query("SELECT name FROM vendors WHERE id = ? LIMIT 1", [body.vendorId]);
+    if (rows[0]?.name) return rows[0].name;
+  }
+  return "Vendor";
+}
+
 async function respondWithBootstrap(res, key, record, status = 200) {
   const bootstrap = await getBootstrap();
   res.status(status).json({ [key]: record, record, bootstrap });
@@ -767,11 +777,12 @@ app.delete("/api/vendor-purchases/:id", asyncHandler(async (req, res) => {
 
 app.post("/api/vendor-payments", asyncHandler(async (req, res) => {
   const body = req.body || {};
+  const vendorName = await vendorNameForPayment(body);
   const result = await exec(
     "INSERT INTO vendor_payments (vendor_id, vendor_name, payment_date, amount, mode, notes) VALUES (?, ?, ?, ?, ?, ?)",
     [
       body.vendorId || null,
-      text(body.vendorName, "Vendor"),
+      vendorName,
       body.paymentDate || today(),
       number(body.amount),
       text(body.mode, "Cash"),
@@ -784,9 +795,10 @@ app.post("/api/vendor-payments", asyncHandler(async (req, res) => {
 
 app.put("/api/vendor-payments/:id", asyncHandler(async (req, res) => {
   const body = req.body || {};
+  const vendorName = await vendorNameForPayment(body);
   await exec(
     "UPDATE vendor_payments SET vendor_id = ?, vendor_name = ?, payment_date = ?, amount = ?, mode = ?, notes = ? WHERE id = ?",
-    [body.vendorId || null, text(body.vendorName, "Vendor"), body.paymentDate || today(), number(body.amount), text(body.mode, "Cash"), nullableText(body.notes), req.params.id]
+    [body.vendorId || null, vendorName, body.paymentDate || today(), number(body.amount), text(body.mode, "Cash"), nullableText(body.notes), req.params.id]
   );
   const vendorPayment = (await listVendorPayments()).find((item) => String(item.id) === String(req.params.id));
   await respondWithBootstrap(res, "vendorPayment", vendorPayment);

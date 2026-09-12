@@ -266,41 +266,13 @@ function applyPaymentAmountToPurchase(purchase, paymentAmount) {
   };
 }
 
-function resolvePurchaseBalances(purchases, payments = []) {
-  const resolved = purchases.map((purchase) => ({
+function resolvePurchaseBalances(purchases) {
+  return purchases.map((purchase) => ({
     ...purchase,
     amount: purchaseAmount(purchase),
     paid: Number(purchase.paid || 0),
     pending: purchasePending(purchase),
   }));
-  const byId = new Map(resolved.map((purchase) => [String(purchase.id), purchase]));
-
-  payments.forEach((payment) => {
-    let remaining = Number(payment.amount || 0);
-    paymentPurchaseIds(payment).forEach((purchaseId) => {
-      const purchase = byId.get(String(purchaseId));
-      if (!purchase || remaining <= 0) return;
-      const nextPurchase = applyPaymentAmountToPurchase(purchase, remaining);
-      remaining -= purchase.pending - nextPurchase.pending;
-      Object.assign(purchase, nextPurchase);
-    });
-  });
-
-  payments
-    .filter((payment) => /^Payment for \d+ pending purchase/i.test(String(payment.notes || "")))
-    .forEach((payment) => {
-      const pendingMatch = resolved.find(
-        (purchase) =>
-          purchase.pending === Number(payment.amount || 0) &&
-          vendorKey(purchase) === vendorKey(payment) &&
-          purchase.date <= payment.paymentDate
-      );
-      if (pendingMatch) {
-        Object.assign(pendingMatch, applyPaymentAmountToPurchase(pendingMatch, payment.amount));
-      }
-    });
-
-  return resolved;
 }
 
 function applyDynamicVendorBalances(vendors, purchases, payments) {
@@ -653,6 +625,7 @@ export default function App() {
 
     return {
       vendorId: selectedVendor?.id ? Number(selectedVendor.id) : undefined,
+      vendorName: selectedVendor?.name || record.vendorName,
       amount: record.amount,
       mode: record.mode,
       paymentDate: record.paymentDate,
@@ -901,8 +874,8 @@ export default function App() {
   }
 
   const dynamicVendorPurchaseRows = useMemo(
-    () => resolvePurchaseBalances(vendorPurchaseRows, vendorPaymentRows),
-    [vendorPurchaseRows, vendorPaymentRows]
+    () => resolvePurchaseBalances(vendorPurchaseRows),
+    [vendorPurchaseRows]
   );
   const dynamicVendorRows = useMemo(
     () => applyDynamicVendorBalances(vendorRows, dynamicVendorPurchaseRows, vendorPaymentRows),
