@@ -4,6 +4,7 @@ import {
   Bell,
   CalendarCheck2,
   CheckCircle2,
+  Download,
   Eye,
   Handshake,
   LayoutDashboard,
@@ -22,6 +23,7 @@ import {
   Tags,
   Trash2,
   Truck,
+  Upload,
   UserRound,
   UsersRound,
   WalletCards,
@@ -71,6 +73,12 @@ const iconMap = {
 };
 
 const UNIT_OPTIONS = ["kg", "gm", "ltr", "ml", "pcs", "box", "packet", "dozen", "bag"];
+const INVENTORY_CSV_COLUMNS = ["name", "category", "stock", "unit", "min", "rate"];
+const INVENTORY_DEMO_CSV = `${INVENTORY_CSV_COLUMNS.join(",")}
+Maida,Flour,50,kg,10,38
+Sugar,Sweetener,80,kg,20,44
+Ghee,Dairy,25,kg,5,620
+`;
 const ROLE_OPTIONS = [
   { value: "admin", label: "Admin" },
   { value: "manager", label: "Manager" },
@@ -90,6 +98,70 @@ function money(value) {
 
 function quantity(value) {
   return Number(value || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+}
+
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let quoted = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (quoted) {
+      if (char === '"' && next === '"') {
+        cell += '"';
+        index += 1;
+      } else if (char === '"') {
+        quoted = false;
+      } else {
+        cell += char;
+      }
+    } else if (char === '"') {
+      quoted = true;
+    } else if (char === ",") {
+      row.push(cell);
+      cell = "";
+    } else if (char === "\n") {
+      row.push(cell);
+      if (row.some((value) => value.trim())) rows.push(row);
+      row = [];
+      cell = "";
+    } else if (char !== "\r") {
+      cell += char;
+    }
+  }
+
+  row.push(cell);
+  if (row.some((value) => value.trim())) rows.push(row);
+  return rows;
+}
+
+function csvToRecords(text) {
+  const rows = parseCsv(text);
+  if (!rows.length) return [];
+  const headers = rows[0].map((header) => header.trim().toLowerCase().replace(/\s+/g, "_"));
+
+  return rows
+    .slice(1)
+    .map((row) =>
+      Object.fromEntries(headers.map((header, index) => [header, (row[index] || "").trim()]))
+    )
+    .filter((record) => Object.values(record).some(Boolean));
+}
+
+function downloadTextFile(filename, content, type = "text/csv") {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function normalizeEmployee(employee, index = 0) {
@@ -1493,6 +1565,7 @@ function FinanceDashboard({ salesBills, staff, expenseRows, vendorRows, vendorPu
 function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
   const saleProducts = productRows;
   const [items, setItems] = useState([]);
+  const [shouldSeedItem, setShouldSeedItem] = useState(true);
   const [discount, setDiscount] = useState(0);
   const [gst, setGst] = useState(false);
   const [mode, setMode] = useState("Cash");
@@ -1569,18 +1642,34 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
   }, [nextBillNo, savedBillKey]);
 
   useEffect(() => {
-    if (!items.length && saleProducts[0]) {
+    if (shouldSeedItem && !items.length && saleProducts[0]) {
       setItems([{ product: saleProducts[0].name, qty: 1 }]);
+      setShouldSeedItem(false);
     }
-  }, [items.length, saleProducts]);
+  }, [items.length, saleProducts, shouldSeedItem]);
 
   function updateItem(index, patch) {
-    setItems(items.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
+    setItems((records) => records.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
+    setSavedBillKey("");
+  }
+
+  function addSaleItem() {
+    if (!saleProducts[0]) return;
+    setShouldSeedItem(false);
+    setItems((records) => [...records, { product: saleProducts[0].name, qty: 1 }]);
+    setSavedBillKey("");
+  }
+
+  function removeSaleItem(index) {
+    setShouldSeedItem(false);
+    setItems((records) => records.filter((_, itemIndex) => itemIndex !== index));
+    setSavedBillKey("");
   }
 
   function startNewBill() {
     const freshDate = today();
     setItems(saleProducts[0] ? [{ product: saleProducts[0].name, qty: 1 }] : []);
+    setShouldSeedItem(false);
     setDiscount(0);
     setGst(false);
     setMode("Cash");
@@ -1650,7 +1739,7 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
               <button
                 className="action-button"
                 type="button"
-                onClick={() => setItems([...items, { product: saleProducts[0].name, qty: 1 }])}
+                onClick={addSaleItem}
                 disabled={!saleProducts.length}
               >
                 <PackageSearch size={18} />
@@ -1691,8 +1780,8 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill }) {
                 />
                 <span className="sale-rate">{money(item.rate)} / {item.unit}</span>
                 <strong>{money(item.total)}</strong>
-                <button className="icon-button quiet" type="button" onClick={() => setItems(items.filter((_, itemIndex) => itemIndex !== index))}>
-                  x
+                <button className="icon-button quiet" type="button" onClick={() => removeSaleItem(index)} aria-label={`Remove ${item.product}`}>
+                  <X size={16} />
                 </button>
               </div>
             ))}
@@ -1818,6 +1907,7 @@ function InventoryPage({
   onUpdateProduct,
   onDeleteProduct,
 }) {
+  const csvInputRef = useRef(null);
   const [modalMode, setModalMode] = useState(null);
   const [materialForm, setMaterialForm] = useState({
     name: "",
@@ -1843,6 +1933,7 @@ function InventoryPage({
     wastage: 0,
   });
   const [message, setMessage] = useState("");
+  const [importingCsv, setImportingCsv] = useState(false);
 
   useEffect(() => {
     const selected = materialRows.find((material) => material.id === stockForm.id) || materialRows[0];
@@ -1903,6 +1994,59 @@ function InventoryPage({
     setModalMode(null);
   }
 
+  function normalizeInventoryImportRow(row) {
+    return normalizeMaterial({
+      name: row.name || row.material || row.item || "",
+      category: row.category || row.type || "",
+      stock: row.stock || row.qty || row.quantity || 0,
+      unit: row.unit || "kg",
+      min: row.min || row.minimum || row.minimum_stock || row.minimumstock || 0,
+      rate: row.rate || row.price || 0,
+    });
+  }
+
+  async function importInventoryCsv(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setImportingCsv(true);
+    try {
+      const importedRows = csvToRecords(await file.text())
+        .map(normalizeInventoryImportRow)
+        .filter((record) => record.name.trim());
+      const uniqueRows = Array.from(
+        new Map(importedRows.map((record) => [record.name.trim().toLowerCase(), record])).values()
+      );
+
+      if (!uniqueRows.length) {
+        setMessage("CSV has no raw material rows");
+        return;
+      }
+
+      const existingByName = new Map(materialRows.map((material) => [material.name.trim().toLowerCase(), material]));
+      let updated = 0;
+      let created = 0;
+
+      for (const record of uniqueRows) {
+        const existing = existingByName.get(record.name.trim().toLowerCase());
+        if (existing) {
+          await onUpdateMaterial({ ...existing, ...record, id: existing.id });
+          updated += 1;
+        } else {
+          await onSaveMaterial(record);
+          created += 1;
+        }
+      }
+
+      setMessage(`Imported ${uniqueRows.length} raw material rows (${created} new, ${updated} updated)`);
+    } catch {
+      setMessage("CSV import failed. Check the file headings and values.");
+    } finally {
+      setImportingCsv(false);
+      event.target.value = "";
+    }
+  }
+
   async function removeMaterial(material) {
     if (!window.confirm(`Delete ${material.name}?`)) return;
     await onDeleteMaterial(material.id);
@@ -1947,6 +2091,26 @@ function InventoryPage({
         onSecondAction={openStockUpdate}
       >
         {message && <p className="db-message">{message}</p>}
+        <div className="inventory-tools">
+          <input ref={csvInputRef} type="file" accept=".csv,text/csv" onChange={importInventoryCsv} />
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() => csvInputRef.current?.click()}
+            disabled={importingCsv}
+          >
+            <Upload size={16} />
+            {importingCsv ? "Importing..." : "Import CSV"}
+          </button>
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() => downloadTextFile("raw-material-inventory-demo.csv", INVENTORY_DEMO_CSV)}
+          >
+            <Download size={16} />
+            Demo CSV
+          </button>
+        </div>
         <DataTable
           columns={["Material", "Category", "Stock", "In", "Out", "Wastage", "Action"]}
           rows={materialRows.map((material) => [
