@@ -85,7 +85,7 @@ async function migrate() {
     CREATE TABLE IF NOT EXISTS raw_stock (
       id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(160) NOT NULL,
-      category VARCHAR(100) NOT NULL DEFAULT 'General',
+      category VARCHAR(100) NOT NULL DEFAULT '',
       stock DECIMAL(12,3) NOT NULL DEFAULT 0,
       unit VARCHAR(40) NOT NULL DEFAULT 'kg',
       minimum_stock DECIMAL(12,3) NOT NULL DEFAULT 0,
@@ -103,7 +103,7 @@ async function migrate() {
       id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
       sku VARCHAR(80) NULL UNIQUE,
       name VARCHAR(160) NOT NULL,
-      category VARCHAR(100) NOT NULL DEFAULT 'General',
+      category VARCHAR(100) NOT NULL DEFAULT '',
       unit VARCHAR(40) NOT NULL DEFAULT 'kg',
       rate DECIMAL(12,2) NOT NULL DEFAULT 0,
       tax_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
@@ -116,7 +116,7 @@ async function migrate() {
     CREATE TABLE IF NOT EXISTS vendors (
       id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(160) NOT NULL,
-      category VARCHAR(100) NOT NULL DEFAULT 'General',
+      category VARCHAR(100) NOT NULL DEFAULT '',
       contact VARCHAR(80) NOT NULL DEFAULT '',
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -130,7 +130,7 @@ async function migrate() {
       vendor_name VARCHAR(160) NOT NULL,
       purchase_date DATE NOT NULL,
       item_name VARCHAR(160) NOT NULL,
-      category VARCHAR(100) NOT NULL DEFAULT 'General',
+      category VARCHAR(100) NOT NULL DEFAULT '',
       qty DECIMAL(12,3) NOT NULL DEFAULT 0,
       unit VARCHAR(40) NOT NULL DEFAULT 'kg',
       rate DECIMAL(12,2) NOT NULL DEFAULT 0,
@@ -168,7 +168,7 @@ async function migrate() {
       id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
       expense_date DATE NOT NULL,
       label VARCHAR(180) NOT NULL,
-      category VARCHAR(100) NOT NULL DEFAULT 'General',
+      category VARCHAR(100) NOT NULL DEFAULT '',
       amount DECIMAL(12,2) NOT NULL DEFAULT 0,
       mode VARCHAR(40) NOT NULL DEFAULT 'Cash',
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -202,6 +202,22 @@ async function migrate() {
       last_login_at DATETIME NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS role_permissions (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      role_name VARCHAR(80) NOT NULL,
+      module_key VARCHAR(80) NOT NULL,
+      module_label VARCHAR(120) NOT NULL,
+      can_view TINYINT(1) NOT NULL DEFAULT 1,
+      can_add TINYINT(1) NOT NULL DEFAULT 1,
+      can_edit TINYINT(1) NOT NULL DEFAULT 1,
+      can_delete TINYINT(1) NOT NULL DEFAULT 1,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY role_permissions_role_module_unique (role_name, module_key)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
@@ -365,6 +381,19 @@ function mapUser(row) {
   };
 }
 
+function mapPermission(row) {
+  return {
+    id: row.id,
+    role: row.role_name,
+    moduleKey: row.module_key,
+    moduleLabel: row.module_label,
+    canView: Boolean(row.can_view),
+    canAdd: Boolean(row.can_add),
+    canEdit: Boolean(row.can_edit),
+    canDelete: Boolean(row.can_delete),
+  };
+}
+
 function mapSale(row) {
   let items = [];
   try {
@@ -460,13 +489,18 @@ async function listUsers() {
   return rows.map(mapUser);
 }
 
+async function listPermissions() {
+  const rows = await query("SELECT * FROM role_permissions ORDER BY role_name, module_label");
+  return rows.map(mapPermission);
+}
+
 async function listSalesHistory() {
   const rows = await query("SELECT * FROM sales_slips ORDER BY sale_date DESC, id DESC");
   return rows.map(mapSale);
 }
 
 async function getBootstrap() {
-  const [employees, rawStock, products, vendorPurchases, vendorPayments, expenses, categories, users, salesHistory] =
+  const [employees, rawStock, products, vendorPurchases, vendorPayments, expenses, categories, users, permissions, salesHistory] =
     await Promise.all([
       listEmployees(),
       listRawStock(),
@@ -476,6 +510,7 @@ async function getBootstrap() {
       listExpenses(),
       listCategories(),
       listUsers(),
+      listPermissions(),
       listSalesHistory(),
     ]);
   const vendors = await listVendors(vendorPurchases, vendorPayments);
@@ -511,7 +546,7 @@ async function getBootstrap() {
     stockHistory: [],
     salesHistory,
     users,
-    permissions: [],
+    permissions,
     recipes: [],
     productionPlans: [],
     productionBatches: [],
@@ -620,7 +655,7 @@ app.post("/api/raw-stock", asyncHandler(async (req, res) => {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       text(body.name, "Raw material"),
-      text(body.category, "General"),
+      text(body.category),
       number(body.stock),
       text(body.unit, "kg"),
       number(body.min ?? body.minimumStock),
@@ -642,7 +677,7 @@ app.put("/api/raw-stock/:id", asyncHandler(async (req, res) => {
      WHERE id = ?`,
     [
       text(body.name, "Raw material"),
-      text(body.category, "General"),
+      text(body.category),
       number(body.stock),
       text(body.unit, "kg"),
       number(body.min ?? body.minimumStock),
@@ -666,7 +701,7 @@ app.post("/api/products", asyncHandler(async (req, res) => {
   const body = req.body || {};
   const result = await exec(
     "INSERT INTO products (sku, name, category, unit, rate, tax_rate) VALUES (?, ?, ?, ?, ?, ?)",
-    [nullableText(body.sku), text(body.name, "Product"), text(body.category, "General"), text(body.unit, "kg"), number(body.rate), number(body.taxRate)]
+    [nullableText(body.sku), text(body.name, "Product"), text(body.category), text(body.unit, "kg"), number(body.rate), number(body.taxRate)]
   );
   const product = await findOne(listProducts, result.insertId);
   await respondWithBootstrap(res, "product", product, 201);
@@ -676,7 +711,7 @@ app.put("/api/products/:id", asyncHandler(async (req, res) => {
   const body = req.body || {};
   await exec(
     "UPDATE products SET sku = ?, name = ?, category = ?, unit = ?, rate = ?, tax_rate = ? WHERE id = ?",
-    [nullableText(body.sku), text(body.name, "Product"), text(body.category, "General"), text(body.unit, "kg"), number(body.rate), number(body.taxRate), req.params.id]
+    [nullableText(body.sku), text(body.name, "Product"), text(body.category), text(body.unit, "kg"), number(body.rate), number(body.taxRate), req.params.id]
   );
   const product = await findOne(listProducts, req.params.id);
   await respondWithBootstrap(res, "product", product);
@@ -691,7 +726,7 @@ app.post("/api/vendors", asyncHandler(async (req, res) => {
   const body = req.body || {};
   const result = await exec(
     "INSERT INTO vendors (name, category, contact) VALUES (?, ?, ?)",
-    [text(body.name, "Vendor"), text(body.category, "General"), text(body.contact)]
+    [text(body.name, "Vendor"), text(body.category), text(body.contact)]
   );
   const purchases = await listVendorPurchases();
   const payments = await listVendorPayments();
@@ -703,7 +738,7 @@ app.put("/api/vendors/:id", asyncHandler(async (req, res) => {
   const body = req.body || {};
   await exec(
     "UPDATE vendors SET name = ?, category = ?, contact = ? WHERE id = ?",
-    [text(body.name, "Vendor"), text(body.category, "General"), text(body.contact), req.params.id]
+    [text(body.name, "Vendor"), text(body.category), text(body.contact), req.params.id]
   );
   const purchases = await listVendorPurchases();
   const payments = await listVendorPayments();
@@ -728,7 +763,7 @@ app.post("/api/vendor-purchases", asyncHandler(async (req, res) => {
       text(body.vendorName, "Vendor"),
       body.purchaseDate || today(),
       text(body.itemName, "Item"),
-      text(body.category, "General"),
+      text(body.category),
       number(body.qty),
       text(body.unit, "kg"),
       number(body.rate),
@@ -755,7 +790,7 @@ app.put("/api/vendor-purchases/:id", asyncHandler(async (req, res) => {
       text(body.vendorName, "Vendor"),
       body.purchaseDate || today(),
       text(body.itemName, "Item"),
-      text(body.category, "General"),
+      text(body.category),
       number(body.qty),
       text(body.unit, "kg"),
       number(body.rate),
@@ -813,7 +848,7 @@ app.post("/api/expenses", asyncHandler(async (req, res) => {
   const body = req.body || {};
   const result = await exec(
     "INSERT INTO expenses (expense_date, label, category, amount, mode) VALUES (?, ?, ?, ?, ?)",
-    [body.expenseDate || today(), text(body.label, "Expense"), text(body.category, "General"), number(body.amount), text(body.mode, "Cash")]
+    [body.expenseDate || today(), text(body.label, "Expense"), text(body.category), number(body.amount), text(body.mode, "Cash")]
   );
   const expense = (await listExpenses()).find((item) => String(item.id) === String(result.insertId));
   await respondWithBootstrap(res, "expense", expense, 201);
@@ -823,7 +858,7 @@ app.put("/api/expenses/:id", asyncHandler(async (req, res) => {
   const body = req.body || {};
   await exec(
     "UPDATE expenses SET expense_date = ?, label = ?, category = ?, amount = ?, mode = ? WHERE id = ?",
-    [body.expenseDate || today(), text(body.label, "Expense"), text(body.category, "General"), number(body.amount), text(body.mode, "Cash"), req.params.id]
+    [body.expenseDate || today(), text(body.label, "Expense"), text(body.category), number(body.amount), text(body.mode, "Cash"), req.params.id]
   );
   const expense = (await listExpenses()).find((item) => String(item.id) === String(req.params.id));
   await respondWithBootstrap(res, "expense", expense);
@@ -891,6 +926,37 @@ app.delete("/api/users/:id", asyncHandler(async (req, res) => {
   await respondWithBootstrap(res, "user", { id: req.params.id });
 }));
 
+app.post("/api/permissions", asyncHandler(async (req, res) => {
+  const body = req.body || {};
+  const roleName = text(body.role || body.roleName, "accountant").toLowerCase();
+  const moduleKey = text(body.moduleKey, "operations");
+  const moduleLabel = text(body.moduleLabel, moduleKey);
+  await exec(
+    `INSERT INTO role_permissions
+      (role_name, module_key, module_label, can_view, can_add, can_edit, can_delete)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+      module_label = VALUES(module_label),
+      can_view = VALUES(can_view),
+      can_add = VALUES(can_add),
+      can_edit = VALUES(can_edit),
+      can_delete = VALUES(can_delete)`,
+    [
+      roleName,
+      moduleKey,
+      moduleLabel,
+      body.canView ? 1 : 0,
+      body.canAdd ? 1 : 0,
+      body.canEdit ? 1 : 0,
+      body.canDelete ? 1 : 0,
+    ]
+  );
+  const permission = (await listPermissions()).find(
+    (item) => item.role === roleName && item.moduleKey === moduleKey
+  );
+  await respondWithBootstrap(res, "permission", permission, 201);
+}));
+
 app.post("/api/login", asyncHandler(async (req, res) => {
   const body = req.body || {};
   const rows = await query(
@@ -902,7 +968,9 @@ app.post("/api/login", asyncHandler(async (req, res) => {
     return;
   }
   await exec("UPDATE users SET last_login_at = NOW() WHERE id = ?", [rows[0].id]);
-  res.json({ user: mapUser(rows[0]) });
+  const users = await listUsers();
+  const user = users.find((item) => String(item.id) === String(rows[0].id)) || mapUser(rows[0]);
+  res.json({ user });
 }));
 
 app.post("/api/sales-slips", asyncHandler(async (req, res) => {

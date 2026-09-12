@@ -40,6 +40,7 @@ import {
   deleteEmployeeRecord,
   saveEmployee,
   saveSalesBill,
+  loginUser,
   updateEmployeeRecord,
   updateBusinessRecord,
 } from "./db";
@@ -68,6 +69,20 @@ const iconMap = {
   UsersRound,
   WalletCards,
 };
+
+const UNIT_OPTIONS = ["kg", "gm", "ltr", "ml", "pcs", "box", "packet", "dozen", "bag"];
+const ROLE_OPTIONS = [
+  { value: "admin", label: "Admin" },
+  { value: "manager", label: "Manager" },
+  { value: "accountant", label: "Accountant" },
+  { value: "cashier", label: "Cashier" },
+  { value: "inventory", label: "Inventory" },
+  { value: "sales", label: "Sales" },
+  { value: "staff", label: "Staff" },
+];
+const ERP_MODULES = navGroups.flatMap((group) =>
+  group.items.map((item) => ({ key: item.key, label: item.label }))
+);
 
 function money(value) {
   return `₹${Math.round(value || 0).toLocaleString("en-IN")}`;
@@ -123,7 +138,7 @@ function normalizeMaterial(item, index = 0) {
   return {
     id: String(item.id || item.name || `MAT-${index + 1}`),
     name: item.name || "Raw material",
-    category: item.category || "General",
+    category: item.category || "",
     stock: Number(item.stock || 0),
     unit: item.unit || "kg",
     min: Number(item.min || 0),
@@ -139,7 +154,7 @@ function normalizeProduct(item, index = 0) {
     id: String(item.id || item.sku || item.name || `PRD-${index + 1}`),
     sku: item.sku || `PRD-${String(index + 1).padStart(3, "0")}`,
     name: item.name || "Product",
-    category: item.category || "Sweets",
+    category: item.category || "",
     unit: item.unit || "kg",
     stock: Number(item.stock || 0),
     rate: Number(item.rate || 0),
@@ -152,7 +167,7 @@ function normalizeVendor(item, index = 0) {
   return {
     id: String(item.id || item.name || `VEN-${index + 1}`),
     name: item.name || "Vendor",
-    category: item.category || "General",
+    category: item.category || "",
     contact: item.contact || "-",
     purchases: Number(item.purchases || 0),
     pending: Number(item.pending || 0),
@@ -172,7 +187,7 @@ function normalizeVendorPurchase(item, index = 0) {
     vendorId: item.vendorId ? String(item.vendorId) : "",
     vendor: item.vendor || item.vendorName || "",
     material: item.material || item.itemName || "",
-    category: item.category || "General",
+    category: item.category || "",
     date: item.date || item.purchaseDate || today(),
     purchaseDate: item.purchaseDate || item.date || today(),
     qty,
@@ -205,7 +220,7 @@ function normalizeExpense(item, index = 0) {
     expenseDate: item.expenseDate || item.date || today(),
     title: item.title || item.label || "Expense",
     label: item.label || item.title || "Expense",
-    category: item.category || "General",
+    category: item.category || "",
     mode: item.mode || "Cash",
     amount: Number(item.amount || 0),
   };
@@ -230,10 +245,68 @@ function normalizeUser(item, index = 0) {
     id: String(item.id || item.username || `USR-${index + 1}`),
     username: item.username || "user",
     name: item.name || "User",
-    role: item.role || "accountant",
+    role: String(item.role || "accountant").toLowerCase(),
     status: item.status || "Active",
     protected: item.protected ?? item.username === "admin",
   };
+}
+
+function normalizePermission(item, index = 0) {
+  const moduleKey = item.moduleKey || item.module_key || "operations";
+  const role = String(item.role || item.roleName || item.role_name || "accountant").toLowerCase();
+  return {
+    id: String(item.id || `${role}-${moduleKey}` || `PERM-${index + 1}`),
+    role,
+    moduleKey,
+    moduleLabel: item.moduleLabel || item.module_label || ERP_MODULES.find((module) => module.key === moduleKey)?.label || moduleKey,
+    canView: Boolean(item.canView ?? item.can_view ?? true),
+    canAdd: Boolean(item.canAdd ?? item.can_add ?? true),
+    canEdit: Boolean(item.canEdit ?? item.can_edit ?? true),
+    canDelete: Boolean(item.canDelete ?? item.can_delete ?? true),
+  };
+}
+
+function defaultPermission(role, module) {
+  const normalizedRole = String(role || "accountant").toLowerCase();
+  return {
+    role: normalizedRole,
+    moduleKey: module.key,
+    moduleLabel: module.label,
+    canView: true,
+    canAdd: true,
+    canEdit: true,
+    canDelete: true,
+  };
+}
+
+function permissionFor(permissionRows, role, module) {
+  const normalizedRole = String(role || "accountant").toLowerCase();
+  if (normalizedRole === "admin") {
+    return defaultPermission("admin", module);
+  }
+  return (
+    permissionRows.find(
+      (permission) => permission.role === normalizedRole && permission.moduleKey === module.key
+    ) || defaultPermission(normalizedRole, module)
+  );
+}
+
+function canViewRoute(permissionRows, role, routeKey) {
+  const module = ERP_MODULES.find((item) => item.key === routeKey);
+  if (!module) return true;
+  return permissionFor(permissionRows, role, module).canView;
+}
+
+function firstAccessibleRoute(permissionRows, role) {
+  return ERP_MODULES.find((module) => permissionFor(permissionRows, role, module).canView)?.key || "operations";
+}
+
+function roleLabel(role) {
+  return ROLE_OPTIONS.find((item) => item.value === role)?.label || String(role || "").replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function uniqueValues(values) {
+  return Array.from(new Set(values.map((value) => String(value || "").trim()).filter(Boolean)));
 }
 
 function vendorKey(record) {
@@ -337,6 +410,7 @@ export default function App() {
   const [expenseRows, setExpenseRows] = useState([]);
   const [categoryRows, setCategoryRows] = useState([]);
   const [userRows, setUserRows] = useState([]);
+  const [permissionRows, setPermissionRows] = useState([]);
 
   useEffect(() => {
     listSalesBills().then((records) => {
@@ -360,17 +434,26 @@ export default function App() {
     if (data.expenses) setExpenseRows(data.expenses.map(normalizeExpense));
     if (data.categories) setCategoryRows(data.categories.map(normalizeCategory));
     if (data.users) setUserRows(data.users.map(normalizeUser));
+    if (data.permissions) setPermissionRows(data.permissions.map(normalizePermission));
   }
 
-  function login(credentials) {
-    if (
-      credentials.username.trim().toLowerCase() === adminUser.username &&
-      credentials.password === adminUser.password
-    ) {
-      const user = { name: adminUser.name, role: adminUser.role, username: adminUser.username };
+  async function login(credentials) {
+    try {
+      const result = await loginUser(credentials);
+      const user = normalizeUser(result.user);
       localStorage.setItem(SESSION_KEY, JSON.stringify(user));
       setSession(user);
       return true;
+    } catch {
+      if (
+        credentials.username.trim().toLowerCase() === adminUser.username &&
+        credentials.password === adminUser.password
+      ) {
+        const user = { name: adminUser.name, role: adminUser.role.toLowerCase(), username: adminUser.username };
+        localStorage.setItem(SESSION_KEY, JSON.stringify(user));
+        setSession(user);
+        return true;
+      }
     }
     return false;
   }
@@ -863,6 +946,29 @@ export default function App() {
     return result;
   }
 
+  async function savePermission(permission) {
+    const record = normalizePermission(permission);
+    const payload = {
+      role: record.role,
+      moduleKey: record.moduleKey,
+      moduleLabel: record.moduleLabel,
+      canView: record.canView,
+      canAdd: record.canAdd,
+      canEdit: record.canEdit,
+      canDelete: record.canDelete,
+    };
+    const result = await createBusinessRecord("/api/permissions", payload);
+    if (result.bootstrap) {
+      applyBusinessData(result.bootstrap);
+    } else {
+      setPermissionRows((records) => [
+        record,
+        ...records.filter((item) => !(item.role === record.role && item.moduleKey === record.moduleKey)),
+      ]);
+    }
+    return { ...result, record };
+  }
+
   async function deleteUser(userId) {
     const result = await deleteBusinessRecord(`/api/users/${userId}`);
     if (result.bootstrap) {
@@ -881,16 +987,21 @@ export default function App() {
     () => applyDynamicVendorBalances(vendorRows, dynamicVendorPurchaseRows, vendorPaymentRows),
     [vendorRows, dynamicVendorPurchaseRows, vendorPaymentRows]
   );
+  const visibleRoute = canViewRoute(permissionRows, session?.role, route)
+    ? route
+    : firstAccessibleRoute(permissionRows, session?.role);
 
   if (!session) {
     return <LoginPage onLogin={login} />;
   }
 
   return (
-    <Shell user={session} route={route} onRoute={setRoute} onLogout={logout}>
+    <Shell user={session} route={visibleRoute} onRoute={setRoute} onLogout={logout} permissionRows={permissionRows}>
       <RouteView
-        route={route}
+        route={visibleRoute}
         onRoute={setRoute}
+        session={session}
+        permissionRows={permissionRows}
         staff={staff}
         employeeStatus={employeeStatus}
         materialRows={materialRows}
@@ -932,6 +1043,7 @@ export default function App() {
         onSaveUser={persistUser}
         onUpdateUser={updateUser}
         onDeleteUser={deleteUser}
+        onSavePermission={savePermission}
       />
     </Shell>
   );
@@ -942,11 +1054,16 @@ function LoginPage({ onLogin }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [forgotMessage, setForgotMessage] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  function submit(event) {
+  async function submit(event) {
     event.preventDefault();
     setForgotMessage("");
-    setError(onLogin({ username, password }) ? "" : "Wrong username or password");
+    setError("");
+    setLoading(true);
+    const ok = await onLogin({ username, password });
+    setLoading(false);
+    setError(ok ? "" : "Wrong username or password");
   }
 
   function forgotPassword() {
@@ -977,8 +1094,8 @@ function LoginPage({ onLogin }) {
         </label>
         {error && <p className="form-error">{error}</p>}
         {forgotMessage && <p className="forgot-note">{forgotMessage}</p>}
-        <button className="action-button full" type="submit">
-          Login
+        <button className="action-button full" type="submit" disabled={loading}>
+          {loading ? "Checking..." : "Login"}
         </button>
         <button className="text-button" type="button" onClick={forgotPassword}>
           Forgot password?
@@ -988,9 +1105,15 @@ function LoginPage({ onLogin }) {
   );
 }
 
-function Shell({ user, route, onRoute, onLogout, children }) {
+function Shell({ user, route, onRoute, onLogout, permissionRows, children }) {
   const [open, setOpen] = useState(false);
   const clock = useClock();
+  const visibleGroups = navGroups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => canViewRoute(permissionRows, user.role, item.key)),
+    }))
+    .filter((group) => group.items.length);
 
   return (
     <div className="erp-shell">
@@ -1007,7 +1130,7 @@ function Shell({ user, route, onRoute, onLogout, children }) {
         </div>
 
         <nav className="nav-stack">
-          {navGroups.map((group) => (
+          {visibleGroups.map((group) => (
             <div className="nav-group" key={group.title}>
               <span>{group.title.toUpperCase()}</span>
               {group.items.map((item) => {
@@ -1087,6 +1210,7 @@ function RouteView({
   expenseRows,
   categoryRows,
   userRows,
+  permissionRows,
   salesBills,
   salesStatus,
   onSaveBill,
@@ -1118,6 +1242,7 @@ function RouteView({
   onSaveUser,
   onUpdateUser,
   onDeleteUser,
+  onSavePermission,
 }) {
   if (route === "operations") {
     return (
@@ -1236,7 +1361,16 @@ function RouteView({
     );
   }
   if (route === "users") {
-    return <UsersPage userRows={userRows} onSaveUser={onSaveUser} onUpdateUser={onUpdateUser} onDeleteUser={onDeleteUser} />;
+    return (
+      <UsersPage
+        userRows={userRows}
+        permissionRows={permissionRows}
+        onSaveUser={onSaveUser}
+        onUpdateUser={onUpdateUser}
+        onDeleteUser={onDeleteUser}
+        onSavePermission={onSavePermission}
+      />
+    );
   }
   return null;
 }
@@ -1687,7 +1821,7 @@ function InventoryPage({
   const [modalMode, setModalMode] = useState(null);
   const [materialForm, setMaterialForm] = useState({
     name: "",
-    category: "Packaging",
+    category: "",
     stock: 0,
     unit: "kg",
     min: 0,
@@ -1696,7 +1830,7 @@ function InventoryPage({
   const [productForm, setProductForm] = useState({
     sku: "",
     name: "",
-    category: "Sweets",
+    category: "",
     unit: "kg",
     rate: 0,
     taxRate: 0,
@@ -1735,7 +1869,7 @@ function InventoryPage({
         ? { ...material }
         : {
             name: "",
-            category: "Packaging",
+            category: "",
             stock: 0,
             unit: "kg",
             min: 0,
@@ -1752,7 +1886,7 @@ function InventoryPage({
         : {
             sku: "",
             name: "",
-            category: "Sweets",
+            category: "",
             unit: "kg",
             rate: 0,
             taxRate: 0,
@@ -1764,7 +1898,7 @@ function InventoryPage({
   async function submitMaterial(event) {
     event.preventDefault();
     const result = await (materialForm.id ? onUpdateMaterial(materialForm) : onSaveMaterial(materialForm));
-    setMaterialForm({ name: "", category: "Packaging", stock: 0, unit: "kg", min: 0, rate: 0 });
+    setMaterialForm({ name: "", category: "", stock: 0, unit: "kg", min: 0, rate: 0 });
     setMessage(materialForm.id ? "Raw material updated" : "Raw material saved");
     setModalMode(null);
   }
@@ -1778,7 +1912,7 @@ function InventoryPage({
   async function submitProduct(event) {
     event.preventDefault();
     const result = await (productForm.id ? onUpdateProduct(productForm) : onSaveProduct(productForm));
-    setProductForm({ sku: "", name: "", category: "Sweets", unit: "kg", rate: 0, taxRate: 0 });
+    setProductForm({ sku: "", name: "", category: "", unit: "kg", rate: 0, taxRate: 0 });
     setMessage(productForm.id ? "Product updated" : "Product saved");
     setModalMode(null);
   }
@@ -2284,17 +2418,13 @@ function DailyVendorsPage({
   const materialOptions = useMemo(() => materialRows, [materialRows]);
   const categoryOptions = useMemo(
     () =>
-      Array.from(
-        new Set(
-          [
-            ...categoryRows
-              .filter((category) => ["raw material", "vendor"].includes(category.type.toLowerCase()))
-              .map((category) => category.name),
-            ...materialOptions.map((item) => item.category),
-            ...vendorOptions.map((vendor) => vendor.category),
-          ].filter(Boolean)
-        )
-      ),
+      uniqueValues([
+        ...categoryRows
+          .filter((category) => ["raw material", "vendor"].includes(category.type.toLowerCase()))
+          .map((category) => category.name),
+        ...materialOptions.map((item) => item.category),
+        ...vendorOptions.map((vendor) => vendor.category),
+      ]),
     [categoryRows, materialOptions, vendorOptions]
   );
   const [dateFilter, setDateFilter] = useState(today());
@@ -2305,9 +2435,9 @@ function DailyVendorsPage({
     date: today(),
     vendor: vendorOptions[0]?.name || "",
     material: materialOptions[0]?.name || "",
-    category: materialOptions[0]?.category || "Packaging",
+    category: materialOptions[0]?.category || "",
     qty: 1,
-    unit: materialOptions[0]?.unit || "pcs",
+    unit: materialOptions[0]?.unit || "kg",
     rate: materialOptions[0]?.rate || 0,
     paid: 0,
     mode: "Cash",
@@ -2327,11 +2457,15 @@ function DailyVendorsPage({
     }
     return options;
   }, [form.category, form.material, form.rate, form.unit, materialOptions]);
-  const [vendorForm, setVendorForm] = useState({ name: "", category: categoryOptions[0] || "Dairy", contact: "" });
+  const unitOptions = useMemo(
+    () => uniqueValues([form.unit, ...materialOptions.map((item) => item.unit), ...UNIT_OPTIONS]),
+    [form.unit, materialOptions]
+  );
+  const [vendorForm, setVendorForm] = useState({ name: "", category: categoryOptions[0] || "", contact: "" });
   const [categoryForm, setCategoryForm] = useState({ type: "Raw Material", name: "" });
   const [materialForm, setMaterialForm] = useState({
     name: "",
-    category: categoryOptions[0] || "Dairy",
+    category: categoryOptions[0] || "",
     stock: 0,
     unit: "kg",
     min: 0,
@@ -2353,6 +2487,10 @@ function DailyVendorsPage({
 
   async function savePurchase(event) {
     event.preventDefault();
+    if (!form.vendor || !form.material) {
+      setMessage("Add vendor and raw material before saving");
+      return;
+    }
     if (editingPurchaseId) {
       await onUpdatePurchase({ ...form, id: editingPurchaseId });
       setMessage("Daily vendor entry updated");
@@ -2397,9 +2535,9 @@ function DailyVendorsPage({
       date: today(),
       vendor: vendorOptions[0]?.name || "",
       material: materialOptions[0]?.name || "",
-      category: materialOptions[0]?.category || categoryOptions[0] || "Packaging",
+      category: materialOptions[0]?.category || categoryOptions[0] || "",
       qty: 1,
-      unit: materialOptions[0]?.unit || "pcs",
+      unit: materialOptions[0]?.unit || "kg",
       rate: materialOptions[0]?.rate || 0,
       paid: 0,
       mode: "Cash",
@@ -2410,7 +2548,7 @@ function DailyVendorsPage({
 
   function changeVendor(value) {
     if (value === "__add_vendor__") {
-      setVendorForm({ name: "", category: categoryOptions[0] || "Dairy", contact: "" });
+      setVendorForm({ name: "", category: categoryOptions[0] || "", contact: "" });
       setModalMode("vendor");
       return;
     }
@@ -2430,7 +2568,7 @@ function DailyVendorsPage({
     if (value === "__add_material__") {
       setMaterialForm({
         name: "",
-        category: form.category || categoryOptions[0] || "Dairy",
+        category: form.category || categoryOptions[0] || "",
         stock: 0,
         unit: "kg",
         min: 0,
@@ -2457,7 +2595,7 @@ function DailyVendorsPage({
       vendor: vendorForm.name,
       category: vendorForm.category || current.category,
     }));
-    setVendorForm({ name: "", category: categoryOptions[0] || "Dairy", contact: "" });
+    setVendorForm({ name: "", category: categoryOptions[0] || "", contact: "" });
     setMessage("Vendor added");
     setModalMode(null);
   }
@@ -2485,7 +2623,7 @@ function DailyVendorsPage({
     }));
     setMaterialForm({
       name: "",
-      category: categoryOptions[0] || "Dairy",
+      category: categoryOptions[0] || "",
       stock: 0,
       unit: "kg",
       min: 0,
@@ -2503,11 +2641,11 @@ function DailyVendorsPage({
         {message && <p className="db-message">{message}</p>}
         <form className="form-grid purchase-form" onSubmit={savePurchase} ref={formRef}>
           <label>DATE<input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></label>
-          <label>VENDOR<select value={form.vendor} onChange={(event) => changeVendor(event.target.value)}><option value="__add_vendor__">Add vendor</option>{vendorSelectOptions.map((vendor) => <option key={vendor.id}>{vendor.name}</option>)}</select></label>
-          <label>CATEGORY<select value={form.category} onChange={(event) => changeCategory(event.target.value)}><option value="__add_category__">Add category</option>{Array.from(new Set([...categoryOptions, form.category].filter(Boolean))).map((item) => <option key={item}>{item}</option>)}</select></label>
-          <label>RAW MATERIAL<select value={form.material} onChange={(event) => changeMaterial(event.target.value)}><option value="__add_material__">Add raw material</option>{materialSelectOptions.map((item) => <option key={item.id}>{item.name}</option>)}</select></label>
+          <label>VENDOR<select value={form.vendor} onChange={(event) => changeVendor(event.target.value)}><option value="">Select vendor</option><option value="__add_vendor__">Add vendor</option>{vendorSelectOptions.map((vendor) => <option key={vendor.id} value={vendor.name}>{vendor.name}</option>)}</select></label>
+          <label>CATEGORY<select value={form.category} onChange={(event) => changeCategory(event.target.value)}><option value="">Select category</option><option value="__add_category__">Add category</option>{uniqueValues([...categoryOptions, form.category]).map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+          <label>RAW MATERIAL<select value={form.material} onChange={(event) => changeMaterial(event.target.value)}><option value="">Select raw material</option><option value="__add_material__">Add raw material</option>{materialSelectOptions.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>
           <label>QTY<input type="number" value={form.qty} onChange={(event) => setForm({ ...form, qty: event.target.value })} /></label>
-          <label>UNIT<input value={form.unit} onChange={(event) => setForm({ ...form, unit: event.target.value })} /></label>
+          <label>UNIT<select value={form.unit} onChange={(event) => setForm({ ...form, unit: event.target.value })}>{unitOptions.map((unit) => <option key={unit} value={unit}>{unit}</option>)}</select></label>
           <label>RATE<input type="number" value={form.rate} onChange={(event) => setForm({ ...form, rate: event.target.value })} /></label>
           <label>PAID TODAY<input type="number" value={form.paid} onChange={(event) => setForm({ ...form, paid: event.target.value })} /></label>
           <label>MODE<select value={form.mode} onChange={(event) => setForm({ ...form, mode: event.target.value })}><option>Cash</option><option>UPI</option><option>Bank</option></select></label>
@@ -2549,7 +2687,7 @@ function DailyVendorsPage({
         <Modal title="Add vendor" eyebrow="Daily vendor" onClose={() => setModalMode(null)}>
           <form className="modal-form grid-form" onSubmit={submitQuickVendor}>
             <label className="field"><span>Vendor name</span><input required value={vendorForm.name} onChange={(event) => setVendorForm({ ...vendorForm, name: event.target.value })} /></label>
-            <label className="field"><span>Category</span><select value={vendorForm.category} onChange={(event) => setVendorForm({ ...vendorForm, category: event.target.value })}>{Array.from(new Set([...categoryOptions, vendorForm.category].filter(Boolean))).map((item) => <option key={item}>{item}</option>)}</select></label>
+            <label className="field"><span>Category</span><select value={vendorForm.category} onChange={(event) => setVendorForm({ ...vendorForm, category: event.target.value })}><option value="">Select category</option>{uniqueValues([...categoryOptions, vendorForm.category]).map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
             <label className="field full"><span>Contact</span><input value={vendorForm.contact} onChange={(event) => setVendorForm({ ...vendorForm, contact: event.target.value })} /></label>
             <button className="action-button full" type="submit">Save vendor</button>
           </form>
@@ -2568,7 +2706,7 @@ function DailyVendorsPage({
         <Modal title="Add raw material" eyebrow="Daily vendor" onClose={() => setModalMode(null)}>
           <form className="modal-form grid-form" onSubmit={submitQuickMaterial}>
             <label className="field"><span>Name</span><input required value={materialForm.name} onChange={(event) => setMaterialForm({ ...materialForm, name: event.target.value })} /></label>
-            <label className="field"><span>Category</span><select value={materialForm.category} onChange={(event) => setMaterialForm({ ...materialForm, category: event.target.value })}>{Array.from(new Set([...categoryOptions, materialForm.category].filter(Boolean))).map((item) => <option key={item}>{item}</option>)}</select></label>
+            <label className="field"><span>Category</span><select value={materialForm.category} onChange={(event) => setMaterialForm({ ...materialForm, category: event.target.value })}><option value="">Select category</option>{uniqueValues([...categoryOptions, materialForm.category]).map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
             <button className="action-button full" type="submit">Save raw material</button>
           </form>
         </Modal>
@@ -2876,11 +3014,11 @@ function AttendancePage({ staff }) {
 
 function VendorsPage({ vendorRows, onSaveVendor, onUpdateVendor, onDeleteVendor }) {
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: "", category: "Dairy", contact: "" });
+  const [form, setForm] = useState({ name: "", category: "", contact: "" });
   const [message, setMessage] = useState("");
 
   function openVendorForm(vendor = null) {
-    setForm(vendor ? { ...vendor } : { name: "", category: "Dairy", contact: "" });
+    setForm(vendor ? { ...vendor } : { name: "", category: "", contact: "" });
     setShowForm(true);
   }
 
@@ -2888,7 +3026,7 @@ function VendorsPage({ vendorRows, onSaveVendor, onUpdateVendor, onDeleteVendor 
     event.preventDefault();
     const result = await (form.id ? onUpdateVendor(form) : onSaveVendor(form));
     setMessage(form.id ? "Vendor updated" : "Vendor saved");
-    setForm({ name: "", category: "Dairy", contact: "" });
+    setForm({ name: "", category: "", contact: "" });
     setShowForm(false);
   }
 
@@ -2935,7 +3073,7 @@ function VendorsPage({ vendorRows, onSaveVendor, onUpdateVendor, onDeleteVendor 
 function ExpensesPage({ expenseRows, onSaveExpense, onUpdateExpense, onDeleteExpense }) {
   const [dateFilter, setDateFilter] = useState("");
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ expenseDate: today(), label: "", category: "Staff Food", mode: "Cash", amount: 0 });
+  const [form, setForm] = useState({ expenseDate: today(), label: "", category: "", mode: "Cash", amount: 0 });
   const [message, setMessage] = useState("");
   const filtered = expenseRows.filter((expense) => !dateFilter || expense.date === dateFilter);
   const total = filtered.reduce((sum, expense) => sum + expense.amount, 0);
@@ -2944,7 +3082,7 @@ function ExpensesPage({ expenseRows, onSaveExpense, onUpdateExpense, onDeleteExp
     setForm(
       expense
         ? { ...expense, expenseDate: expense.expenseDate || expense.date, label: expense.label || expense.title }
-        : { expenseDate: today(), label: "", category: "Staff Food", mode: "Cash", amount: 0 }
+        : { expenseDate: today(), label: "", category: "", mode: "Cash", amount: 0 }
     );
     setShowForm(true);
   }
@@ -2953,7 +3091,7 @@ function ExpensesPage({ expenseRows, onSaveExpense, onUpdateExpense, onDeleteExp
     event.preventDefault();
     const result = await (form.id ? onUpdateExpense(form) : onSaveExpense(form));
     setMessage(form.id ? "Expense updated" : "Expense saved");
-    setForm({ expenseDate: today(), label: "", category: "Staff Food", mode: "Cash", amount: 0 });
+    setForm({ expenseDate: today(), label: "", category: "", mode: "Cash", amount: 0 });
     setShowForm(false);
   }
 
@@ -3017,20 +3155,17 @@ function CategoriesPage({
 }) {
   const rawMaterialCategoryOptions = useMemo(
     () =>
-      Array.from(
-        new Set(
-          [
-            ...categoryRows
-              .filter((category) => category.type.toLowerCase() === "raw material")
-              .map((category) => category.name),
-            ...materialRows.map((material) => material.category),
-            "Dairy",
-            "Grocery",
-            "Packaging",
-          ].filter(Boolean)
-        )
-      ),
+      uniqueValues([
+        ...categoryRows
+          .filter((category) => category.type.toLowerCase() === "raw material")
+          .map((category) => category.name),
+        ...materialRows.map((material) => material.category),
+      ]),
     [categoryRows, materialRows]
+  );
+  const rawMaterialUnitOptions = useMemo(
+    () => uniqueValues([...materialRows.map((material) => material.unit), ...UNIT_OPTIONS]),
+    [materialRows]
   );
   const [activeTab, setActiveTab] = useState("categories");
   const [showCategoryForm, setShowCategoryForm] = useState(false);
@@ -3038,7 +3173,7 @@ function CategoriesPage({
   const [categoryForm, setCategoryForm] = useState({ type: "Product", name: "" });
   const [materialForm, setMaterialForm] = useState({
     name: "",
-    category: "Dairy",
+    category: "",
     stock: 0,
     unit: "kg",
     min: 0,
@@ -3057,7 +3192,7 @@ function CategoriesPage({
         ? { ...material }
         : {
             name: "",
-            category: rawMaterialCategoryOptions[0] || "Dairy",
+            category: rawMaterialCategoryOptions[0] || "",
             stock: 0,
             unit: "kg",
             min: 0,
@@ -3085,7 +3220,7 @@ function CategoriesPage({
     );
     setMaterialForm({
       name: "",
-      category: rawMaterialCategoryOptions[0] || "Dairy",
+      category: rawMaterialCategoryOptions[0] || "",
       stock: 0,
       unit: "kg",
       min: 0,
@@ -3181,7 +3316,14 @@ function CategoriesPage({
                 value={materialForm.category}
                 onChange={(event) => setMaterialForm({ ...materialForm, category: event.target.value })}
               >
-                {rawMaterialCategoryOptions.map((category) => <option key={category}>{category}</option>)}
+                <option value="">Select category</option>
+                {uniqueValues([...rawMaterialCategoryOptions, materialForm.category]).map((category) => <option key={category} value={category}>{category}</option>)}
+              </select>
+            </label>
+            <label className="field">
+              <span>Unit</span>
+              <select value={materialForm.unit} onChange={(event) => setMaterialForm({ ...materialForm, unit: event.target.value })}>
+                {uniqueValues([materialForm.unit, ...rawMaterialUnitOptions]).map((unit) => <option key={unit} value={unit}>{unit}</option>)}
               </select>
             </label>
             <button className="action-button full" type="submit">{materialForm.id ? "Update raw material" : "Save raw material"}</button>
@@ -3192,11 +3334,21 @@ function CategoriesPage({
   );
 }
 
-function UsersPage({ userRows, onSaveUser, onUpdateUser, onDeleteUser }) {
-  const modules = navGroups.flatMap((group) => group.items.map((item) => item.label));
+function UsersPage({ userRows, permissionRows, onSaveUser, onUpdateUser, onDeleteUser, onSavePermission }) {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ username: "", password: "", name: "", role: "accountant", status: "Active" });
+  const [selectedRole, setSelectedRole] = useState("admin");
   const [message, setMessage] = useState("");
+  const roleOptions = useMemo(() => {
+    const roles = uniqueValues([...ROLE_OPTIONS.map((role) => role.value), ...userRows.map((user) => user.role)]);
+    return roles.map((role) => ({ value: role, label: roleLabel(role) }));
+  }, [userRows]);
+
+  useEffect(() => {
+    if (!roleOptions.some((role) => role.value === selectedRole)) {
+      setSelectedRole(roleOptions[0]?.value || "admin");
+    }
+  }, [roleOptions, selectedRole]);
 
   function openUserForm(user = null) {
     setForm(user ? { ...user, password: "" } : { username: "", password: "", name: "", role: "accountant", status: "Active" });
@@ -3209,6 +3361,14 @@ function UsersPage({ userRows, onSaveUser, onUpdateUser, onDeleteUser }) {
     setMessage(form.id ? "User updated" : "User saved");
     setForm({ username: "", password: "", name: "", role: "accountant", status: "Active" });
     setShowForm(false);
+  }
+
+  async function togglePermission(module, field) {
+    if (selectedRole === "admin") return;
+    const current = permissionFor(permissionRows, selectedRole, module);
+    const next = { ...current, [field]: !current[field] };
+    await onSavePermission(next);
+    setMessage(`Permissions updated for ${roleLabel(selectedRole)}`);
   }
 
   async function removeUser(user) {
@@ -3227,7 +3387,7 @@ function UsersPage({ userRows, onSaveUser, onUpdateUser, onDeleteUser }) {
           rows={userRows.map((user) => [
             user.username,
             user.name,
-            user.role,
+            roleLabel(user.role),
             user.status,
             user.protected ? (
               <button className="ghost-button" type="button" onClick={() => openUserForm(user)}>Edit</button>
@@ -3241,9 +3401,28 @@ function UsersPage({ userRows, onSaveUser, onUpdateUser, onDeleteUser }) {
         />
       </Panel>
       <Panel title="Access control" subtitle="Role permissions">
+        <div className="filter-row">
+          <label>
+            ROLE
+            <select value={selectedRole} onChange={(event) => setSelectedRole(event.target.value)}>
+              {roleOptions.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}
+            </select>
+          </label>
+          <strong className="total-chip">{selectedRole === "admin" ? "Full access" : "Editable"}</strong>
+        </div>
         <DataTable
           columns={["Module", "View", "Add", "Edit", "Delete"]}
-          rows={modules.map((module) => [module, "✓", "✓", "✓", module === "Users" ? "-" : "✓"])}
+          rows={ERP_MODULES.map((module) => {
+            const permission = permissionFor(permissionRows, selectedRole, module);
+            const locked = selectedRole === "admin";
+            return [
+              module.label,
+              <input type="checkbox" checked={permission.canView} disabled={locked} onChange={() => togglePermission(module, "canView")} />,
+              <input type="checkbox" checked={permission.canAdd} disabled={locked} onChange={() => togglePermission(module, "canAdd")} />,
+              <input type="checkbox" checked={permission.canEdit} disabled={locked} onChange={() => togglePermission(module, "canEdit")} />,
+              <input type="checkbox" checked={permission.canDelete} disabled={locked} onChange={() => togglePermission(module, "canDelete")} />,
+            ];
+          })}
         />
       </Panel>
       {showForm && (
@@ -3251,8 +3430,8 @@ function UsersPage({ userRows, onSaveUser, onUpdateUser, onDeleteUser }) {
           <form className="modal-form grid-form" onSubmit={submitUser}>
             <label className="field"><span>Username</span><input required value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} /></label>
             <label className="field"><span>Full name</span><input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
-            <label className="field"><span>Password</span><input required={!form.id} type="password" value={form.password || ""} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
-            <label className="field"><span>Role</span><select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}><option value="admin">Admin</option><option value="accountant">Accountant</option></select></label>
+            <label className="field"><span>{form.id ? "New password" : "Password"}</span><input required={!form.id} type="password" value={form.password || ""} autoComplete="new-password" placeholder={form.id ? "Leave blank to keep current password" : "Enter password"} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
+            <label className="field"><span>Role</span><select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}>{roleOptions.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}</select></label>
             <label className="field full"><span>Status</span><select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}><option>Active</option><option>Inactive</option></select></label>
             <button className="action-button full" type="submit">{form.id ? "Update user" : "Save user"}</button>
           </form>

@@ -134,6 +134,7 @@ function businessRecordFromResult(result) {
     result?.payment ||
     result?.expense ||
     result?.category ||
+    result?.permission ||
     result?.user ||
     result
   );
@@ -202,6 +203,10 @@ function toEmployeePayload(employee) {
 
 export async function loadBusinessData() {
   return apiRequest("/api/bootstrap");
+}
+
+export async function loginUser(credentials) {
+  return apiRequest("/api/login", { method: "POST", body: credentials });
 }
 
 export async function createBusinessRecord(path, record) {
