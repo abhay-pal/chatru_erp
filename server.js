@@ -50,6 +50,17 @@ function hashPassword(password) {
   return crypto.createHash("sha256").update(String(password || "")).digest("hex");
 }
 
+function labelScore(value) {
+  const label = String(value || "").trim();
+  if (!label) return -1;
+  const hasUpper = /[A-Z]/.test(label);
+  const hasLower = /[a-z]/.test(label);
+  if (hasUpper && hasLower) return 3;
+  if (hasUpper) return 2;
+  if (hasLower) return 1;
+  return 0;
+}
+
 function vendorKey(record) {
   const id = record.vendorId || record.id;
   const name = record.vendorName || record.vendor || record.name || "";
@@ -576,6 +587,7 @@ async function listSalesHistory() {
 }
 
 async function getBootstrap() {
+  await syncDerivedCategories();
   const [employees, employeeAttendance, rawStock, products, vendorPurchases, inventoryUsage, vendorPayments, expenses, categories, users, permissions, salesHistory] =
     await Promise.all([
       listEmployees(),
@@ -665,7 +677,13 @@ async function ensureCategory(type, name) {
     "SELECT * FROM categories WHERE LOWER(type) = LOWER(?) AND LOWER(name) = LOWER(?) LIMIT 1",
     [categoryType, categoryName]
   );
-  if (existing[0]) return mapCategory(existing[0]);
+  if (existing[0]) {
+    if (labelScore(categoryName) > labelScore(existing[0].name)) {
+      await exec("UPDATE categories SET type = ?, name = ? WHERE id = ?", [categoryType, categoryName, existing[0].id]);
+      return findOne(listCategories, existing[0].id);
+    }
+    return mapCategory(existing[0]);
+  }
   const result = await exec("INSERT INTO categories (type, name, items, margin) VALUES (?, ?, ?, ?)", [
     categoryType,
     categoryName,
@@ -673,6 +691,22 @@ async function ensureCategory(type, name) {
     "Auto",
   ]);
   return findOne(listCategories, result.insertId);
+}
+
+async function syncDerivedCategories() {
+  const sources = [
+    ["Raw Material", "SELECT DISTINCT category AS name FROM raw_stock WHERE TRIM(category) <> ''"],
+    ["Product", "SELECT DISTINCT category AS name FROM products WHERE TRIM(category) <> ''"],
+    ["Vendor", "SELECT DISTINCT category AS name FROM vendors WHERE TRIM(category) <> ''"],
+    ["Expense", "SELECT DISTINCT category AS name FROM expenses WHERE TRIM(category) <> ''"],
+  ];
+
+  for (const [categoryType, sql] of sources) {
+    const rows = await query(sql);
+    for (const row of rows) {
+      await ensureCategory(categoryType, row.name);
+    }
+  }
 }
 
 async function ensureRawStockFromMaterial({ itemName, category, unit, rate }) {
@@ -908,6 +942,7 @@ app.delete("/api/raw-stock/:id", asyncHandler(async (req, res) => {
 
 app.post("/api/products", asyncHandler(async (req, res) => {
   const body = req.body || {};
+  await ensureCategory("Product", body.category);
   const result = await exec(
     "INSERT INTO products (sku, name, category, unit, rate, tax_rate) VALUES (?, ?, ?, ?, ?, ?)",
     [nullableText(body.sku), text(body.name, "Product"), text(body.category), text(body.unit, "kg"), number(body.rate), number(body.taxRate)]
@@ -918,6 +953,7 @@ app.post("/api/products", asyncHandler(async (req, res) => {
 
 app.put("/api/products/:id", asyncHandler(async (req, res) => {
   const body = req.body || {};
+  await ensureCategory("Product", body.category);
   await exec(
     "UPDATE products SET sku = ?, name = ?, category = ?, unit = ?, rate = ?, tax_rate = ? WHERE id = ?",
     [nullableText(body.sku), text(body.name, "Product"), text(body.category), text(body.unit, "kg"), number(body.rate), number(body.taxRate), req.params.id]
@@ -965,7 +1001,7 @@ app.delete("/api/vendors/:id", asyncHandler(async (req, res) => {
 app.post("/api/vendor-purchases", asyncHandler(async (req, res) => {
   const body = req.body || {};
   const amount = number(body.amount, number(body.qty) * number(body.rate));
-  await ensureCategory("Vendor", body.category);
+  await ensureCategory("Raw Material", body.category);
   const material = await materialForInventoryMovement({
     itemName: body.itemName,
     category: body.category,
@@ -1004,7 +1040,7 @@ app.put("/api/vendor-purchases/:id", asyncHandler(async (req, res) => {
     const previousMaterial = await materialForInventoryMovement(existing);
     await adjustRawStock(previousMaterial.id, -number(existing.qty), { inToday: -number(existing.qty) });
   }
-  await ensureCategory("Vendor", body.category);
+  await ensureCategory("Raw Material", body.category);
   const material = await materialForInventoryMovement({
     itemName: body.itemName,
     category: body.category,
@@ -1194,6 +1230,7 @@ app.delete("/api/vendor-payments/:id", asyncHandler(async (req, res) => {
 
 app.post("/api/expenses", asyncHandler(async (req, res) => {
   const body = req.body || {};
+  await ensureCategory("Expense", body.category);
   const result = await exec(
     "INSERT INTO expenses (expense_date, label, category, amount, mode) VALUES (?, ?, ?, ?, ?)",
     [body.expenseDate || today(), text(body.label, "Expense"), text(body.category), number(body.amount), text(body.mode, "Cash")]
@@ -1204,6 +1241,7 @@ app.post("/api/expenses", asyncHandler(async (req, res) => {
 
 app.put("/api/expenses/:id", asyncHandler(async (req, res) => {
   const body = req.body || {};
+  await ensureCategory("Expense", body.category);
   await exec(
     "UPDATE expenses SET expense_date = ?, label = ?, category = ?, amount = ?, mode = ? WHERE id = ?",
     [body.expenseDate || today(), text(body.label, "Expense"), text(body.category), number(body.amount), text(body.mode, "Cash"), req.params.id]

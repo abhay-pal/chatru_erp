@@ -84,6 +84,45 @@ const EMPLOYEE_DEMO_CSV = `${EMPLOYEE_CSV_COLUMNS.join(",")}
 Ramesh,Karigar,+91 98765 43210,Muzaffarnagar,1234 5678 9012,2026-09-01,18000,09:00:00,21:00:00
 Suresh,Counter,+91 98765 43211,Muzaffarnagar,2234 5678 9012,2026-09-05,15000,09:00:00,21:00:00
 `;
+const PRODUCT_CSV_COLUMNS = ["sku", "name", "category", "unit", "rate", "taxRate"];
+const PRODUCT_DEMO_CSV = `${PRODUCT_CSV_COLUMNS.join(",")}
+SAM-001,Samosa,Namkeen,piece,12,5
+KAL-001,Kalakand,Sweets,kg,420,5
+`;
+const VENDOR_CSV_COLUMNS = ["name", "category", "contact"];
+const VENDOR_DEMO_CSV = `${VENDOR_CSV_COLUMNS.join(",")}
+Anshul,Dairy,+91 98765 43210
+Bharat Gas,Gas,+91 98765 43211
+`;
+const EXPENSE_CSV_COLUMNS = ["expenseDate", "label", "category", "mode", "amount"];
+const EXPENSE_DEMO_CSV = `${EXPENSE_CSV_COLUMNS.join(",")}
+${today()},Shop rent,Rent,Bank,25000
+${today()},Cleaning,Housekeeping,Cash,500
+`;
+const CATEGORY_CSV_COLUMNS = ["type", "name"];
+const CATEGORY_DEMO_CSV = `${CATEGORY_CSV_COLUMNS.join(",")}
+Raw Material,Dairy
+Raw Material,Flour
+Vendor,Dairy
+Expense,Rent
+Product,Namkeen
+`;
+const USER_CSV_COLUMNS = ["username", "password", "name", "role", "status"];
+const USER_DEMO_CSV = `${USER_CSV_COLUMNS.join(",")}
+counter1,ChangeMe123,Counter Staff,cashier,Active
+inventory1,ChangeMe123,Inventory Staff,inventory,Active
+`;
+const INVENTORY_USAGE_CSV_COLUMNS = ["usageDate", "materialName", "category", "usedQty", "unusedQty", "wastageQty", "unit", "notes"];
+const INVENTORY_USAGE_DEMO_CSV = `${INVENTORY_USAGE_CSV_COLUMNS.join(",")}
+${today()},Ghee,Dairy,2,23,0,kg,Morning production
+${today()},Maida,Flour,5,45,0,kg,Samosa batch
+`;
+const DAILY_VENDOR_CSV_COLUMNS = ["date", "vendor", "category", "material", "qty", "unit", "rate", "paid", "mode", "notes"];
+const DAILY_VENDOR_DEMO_CSV = `${DAILY_VENDOR_CSV_COLUMNS.join(",")}
+${today()},Anshul,Dairy,Ghee,1,kg,620,0,Cash,Milk sweets stock
+${today()},Bharat Gas,Gas,Cylinder,1,pcs,2500,2500,UPI,Gas refill
+`;
+const CATEGORY_TYPE_OPTIONS = ["Product", "Vendor", "Raw Material", "Expense"];
 const ROLE_OPTIONS = [
   { value: "admin", label: "Admin" },
   { value: "manager", label: "Manager" },
@@ -435,8 +474,60 @@ function roleLabel(role) {
   return ROLE_OPTIONS.find((item) => item.value === role)?.label || String(role || "").replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
+function lookupKey(value) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function optionLabelScore(value) {
+  const label = String(value || "").trim();
+  if (!label) return -1;
+  const hasUpper = /[A-Z]/.test(label);
+  const hasLower = /[a-z]/.test(label);
+  if (hasUpper && hasLower) return 3;
+  if (hasUpper) return 2;
+  if (hasLower) return 1;
+  return 0;
+}
+
 function uniqueValues(values) {
-  return Array.from(new Set(values.map((value) => String(value || "").trim()).filter(Boolean)));
+  const unique = new Map();
+  values.forEach((value) => {
+    const label = String(value || "").trim();
+    if (!label) return;
+    const key = lookupKey(label);
+    const existing = unique.get(key);
+    if (!existing || optionLabelScore(label) > optionLabelScore(existing)) {
+      unique.set(key, label);
+    }
+  });
+  return Array.from(unique.values());
+}
+
+function sameText(a, b) {
+  return lookupKey(a) === lookupKey(b);
+}
+
+function categoryNames(categoryRows, type, fallbackValues = []) {
+  return uniqueValues([
+    ...categoryRows
+      .filter((category) => sameText(category.type, type))
+      .map((category) => category.name),
+    ...fallbackValues,
+  ]);
+}
+
+function byName(records, name, field = "name") {
+  const key = lookupKey(name);
+  return records.find((record) => lookupKey(record[field]) === key);
+}
+
+function uniqueBy(records, keyFn) {
+  const unique = new Map();
+  records.forEach((record) => {
+    const key = keyFn(record);
+    if (key) unique.set(key, record);
+  });
+  return Array.from(unique.values());
 }
 
 function vendorKey(record) {
@@ -902,7 +993,7 @@ export default function App() {
       vendorRows.find((vendor) => vendor.name === record.vendor);
 
     return {
-      vendorId: selectedVendor?.id ? Number(selectedVendor.id) : undefined,
+      vendorId: selectedVendor?.id ? Number(selectedVendor.id) : record.vendorId ? Number(record.vendorId) : undefined,
       vendorName: record.vendor,
       purchaseDate: record.date,
       itemName: record.material,
@@ -1619,6 +1710,7 @@ function RouteView({
     return (
       <ExpensesPage
         expenseRows={expenseRows}
+        categoryRows={categoryRows}
         onSaveExpense={onSaveExpense}
         onUpdateExpense={onUpdateExpense}
         onDeleteExpense={onDeleteExpense}
@@ -2141,6 +2233,7 @@ function InventoryPage({
   globalSearch = "",
 }) {
   const csvInputRef = useRef(null);
+  const productCsvInputRef = useRef(null);
   const [modalMode, setModalMode] = useState(null);
   const [materialForm, setMaterialForm] = useState({
     name: "",
@@ -2167,24 +2260,13 @@ function InventoryPage({
   });
   const [message, setMessage] = useState("");
   const [importingCsv, setImportingCsv] = useState(false);
+  const [importingProductCsv, setImportingProductCsv] = useState(false);
   const rawMaterialCategoryOptions = useMemo(
-    () =>
-      uniqueValues([
-        ...categoryRows
-          .filter((category) => category.type.toLowerCase() === "raw material")
-          .map((category) => category.name),
-        ...materialRows.map((material) => material.category),
-      ]),
+    () => categoryNames(categoryRows, "Raw Material", materialRows.map((material) => material.category)),
     [categoryRows, materialRows]
   );
   const productCategoryOptions = useMemo(
-    () =>
-      uniqueValues([
-        ...categoryRows
-          .filter((category) => category.type.toLowerCase() === "product")
-          .map((category) => category.name),
-        ...productRows.map((product) => product.category),
-      ]),
+    () => categoryNames(categoryRows, "Product", productRows.map((product) => product.category)),
     [categoryRows, productRows]
   );
   const filteredMaterialRows = materialRows.filter((material) =>
@@ -2264,6 +2346,17 @@ function InventoryPage({
     });
   }
 
+  function normalizeProductImportRow(row) {
+    return normalizeProduct({
+      sku: row.sku || row.code || "",
+      name: row.name || row.product || row.item || "",
+      category: row.category || row.type || "",
+      unit: row.unit || "piece",
+      rate: row.rate || row.price || 0,
+      taxRate: row.taxrate || row.tax_rate || row.gst || row.gst_percent || 0,
+    });
+  }
+
   async function importInventoryCsv(event) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -2319,6 +2412,18 @@ function InventoryPage({
     }
   }
 
+  function exportInventoryCsv() {
+    const records = materialRows.map((material) => ({
+      name: material.name,
+      category: material.category,
+      stock: material.stock,
+      unit: material.unit,
+      min: material.min,
+      rate: material.rate,
+    }));
+    downloadTextFile("raw-material-inventory-export.csv", recordsToCsv(INVENTORY_CSV_COLUMNS, records));
+  }
+
   async function removeMaterial(material) {
     if (!window.confirm(`Delete ${material.name}?`)) return;
     await onDeleteMaterial(material.id);
@@ -2331,6 +2436,76 @@ function InventoryPage({
     setProductForm({ sku: "", name: "", category: "", unit: "kg", rate: 0, taxRate: 0 });
     setMessage(productForm.id ? "Product updated" : "Product saved");
     setModalMode(null);
+  }
+
+  async function importProductsCsv(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setImportingProductCsv(true);
+    try {
+      const importedRows = csvToRecords(await file.text())
+        .map(normalizeProductImportRow)
+        .filter((record) => record.name.trim());
+      const uniqueRows = uniqueBy(
+        importedRows,
+        (record) => lookupKey(record.sku || record.name)
+      );
+
+      if (!uniqueRows.length) {
+        setMessage("CSV has no product rows");
+        return;
+      }
+
+      const existingBySku = new Map(productRows.filter((product) => product.sku).map((product) => [lookupKey(product.sku), product]));
+      const existingByName = new Map(productRows.map((product) => [lookupKey(product.name), product]));
+      const existingCategories = new Set(
+        categoryRows
+          .filter((category) => sameText(category.type, "Product"))
+          .map((category) => lookupKey(category.name))
+      );
+      const importCategories = uniqueValues(uniqueRows.map((record) => record.category));
+      for (const category of importCategories) {
+        const key = lookupKey(category);
+        if (!existingCategories.has(key)) {
+          await onSaveCategory({ type: "Product", name: category });
+          existingCategories.add(key);
+        }
+      }
+
+      let updated = 0;
+      let created = 0;
+      for (const record of uniqueRows) {
+        const existing =
+          (record.sku && existingBySku.get(lookupKey(record.sku))) ||
+          existingByName.get(lookupKey(record.name));
+        if (existing) {
+          await onUpdateProduct({ ...existing, ...record, id: existing.id });
+          updated += 1;
+        } else {
+          await onSaveProduct(record);
+          created += 1;
+        }
+      }
+      setMessage(`Imported ${uniqueRows.length} product rows (${created} new, ${updated} updated)`);
+    } catch {
+      setMessage("Product CSV import failed. Check the file headings and values.");
+    } finally {
+      setImportingProductCsv(false);
+      event.target.value = "";
+    }
+  }
+
+  function exportProductsCsv() {
+    const records = productRows.map((product) => ({
+      sku: product.sku,
+      name: product.name,
+      category: product.category,
+      unit: product.unit,
+      rate: product.rate,
+      taxRate: product.taxRate,
+    }));
+    downloadTextFile("finished-goods-export.csv", recordsToCsv(PRODUCT_CSV_COLUMNS, records));
   }
 
   async function removeProduct(product) {
@@ -2382,6 +2557,15 @@ function InventoryPage({
             <Download size={16} />
             Demo CSV
           </button>
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={exportInventoryCsv}
+            disabled={!materialRows.length}
+          >
+            <Download size={16} />
+            Export CSV
+          </button>
         </div>
         <DataTable
           columns={["Material", "Category", "Stock", "In", "Out", "Wastage", "Action"]}
@@ -2400,6 +2584,35 @@ function InventoryPage({
         />
       </Panel>
       <Panel title="Finished goods" subtitle="Ready stock" action="Add product" onAction={() => openProductForm()}>
+        <div className="inventory-tools">
+          <input ref={productCsvInputRef} type="file" accept=".csv,text/csv" onChange={importProductsCsv} />
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() => productCsvInputRef.current?.click()}
+            disabled={importingProductCsv}
+          >
+            <Upload size={16} />
+            {importingProductCsv ? "Importing..." : "Import CSV"}
+          </button>
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() => downloadTextFile("finished-goods-demo.csv", PRODUCT_DEMO_CSV)}
+          >
+            <Download size={16} />
+            Demo CSV
+          </button>
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={exportProductsCsv}
+            disabled={!productRows.length}
+          >
+            <Download size={16} />
+            Export CSV
+          </button>
+        </div>
         <div className="product-grid">
           {filteredProductRows.map((product) => (
             <article key={product.name}>
@@ -2486,6 +2699,7 @@ function InventoryUsagePage({
   onDeleteUsage,
   globalSearch = "",
 }) {
+  const csvInputRef = useRef(null);
   const [form, setForm] = useState(() => ({
     usageDate: today(),
     materialId: materialRows[0]?.id || "",
@@ -2499,6 +2713,7 @@ function InventoryUsagePage({
   }));
   const [editingId, setEditingId] = useState("");
   const [message, setMessage] = useState("");
+  const [importingCsv, setImportingCsv] = useState(false);
   const selectedMaterial =
     materialRows.find((material) => material.id === form.materialId) ||
     materialRows.find((material) => material.name === form.materialName);
@@ -2620,10 +2835,80 @@ function InventoryUsagePage({
     if (editingId === usage.id) cancelEdit();
   }
 
+  function normalizeUsageImportRow(row) {
+    const material =
+      byName(materialRows, row.materialname || row.material_name || row.material || row.name) ||
+      null;
+    const usedQty = Number(row.usedqty || row.used_qty || row.used || 0);
+    const wastageQty = Number(row.wastageqty || row.wastage_qty || row.wastage || 0);
+    const stock = Number(material?.stock || 0);
+    return normalizeInventoryUsage({
+      usageDate: row.usagedate || row.usage_date || row.date || today(),
+      materialId: material?.id || "",
+      materialName: row.materialname || row.material_name || row.material || row.name || material?.name || "",
+      category: row.category || material?.category || "",
+      usedQty,
+      unusedQty: row.unusedqty || row.unused_qty || row.unused || Math.max(0, stock - usedQty - wastageQty),
+      wastageQty,
+      unit: row.unit || material?.unit || "kg",
+      notes: row.notes || "",
+    });
+  }
+
+  async function importUsageCsv(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setImportingCsv(true);
+    try {
+      const importedRows = csvToRecords(await file.text())
+        .map(normalizeUsageImportRow)
+        .filter((record) => record.materialName.trim());
+
+      for (const record of importedRows) {
+        await onSaveUsage(record);
+      }
+      setMessage(`Imported ${importedRows.length} inventory usage rows`);
+    } catch {
+      setMessage("Inventory usage CSV import failed. Check the headings and values.");
+    } finally {
+      setImportingCsv(false);
+      event.target.value = "";
+    }
+  }
+
+  function exportUsageCsv() {
+    const records = usageRows.map((usage) => ({
+      usageDate: usage.usageDate,
+      materialName: usage.materialName,
+      category: usage.category,
+      usedQty: usage.usedQty,
+      unusedQty: usage.unusedQty,
+      wastageQty: usage.wastageQty,
+      unit: usage.unit,
+      notes: usage.notes,
+    }));
+    downloadTextFile("inventory-usage-export.csv", recordsToCsv(INVENTORY_USAGE_CSV_COLUMNS, records));
+  }
+
   return (
     <Page>
       <Panel title="Inventory usage" subtitle="Used, unused, and wastage">
         {message && <p className="db-message">{message}</p>}
+        <div className="inventory-tools">
+          <input ref={csvInputRef} type="file" accept=".csv,text/csv" onChange={importUsageCsv} />
+          <button className="ghost-button" type="button" onClick={() => csvInputRef.current?.click()} disabled={importingCsv}>
+            <Upload size={16} />
+            {importingCsv ? "Importing..." : "Import CSV"}
+          </button>
+          <button className="ghost-button" type="button" onClick={() => downloadTextFile("inventory-usage-demo.csv", INVENTORY_USAGE_DEMO_CSV)}>
+            <Download size={16} />
+            Demo CSV
+          </button>
+          <button className="ghost-button" type="button" onClick={exportUsageCsv} disabled={!usageRows.length}>
+            <Download size={16} />
+            Export CSV
+          </button>
+        </div>
         <form className="form-grid purchase-form" onSubmit={submitUsage}>
           <label>DATE<input type="date" value={form.usageDate} onChange={(event) => setForm({ ...form, usageDate: event.target.value })} /></label>
           <label>
@@ -3070,24 +3355,15 @@ function DailyVendorsPage({
   globalSearch = "",
 }) {
   const formRef = useRef(null);
+  const csvInputRef = useRef(null);
   const vendorOptions = useMemo(() => vendorRows, [vendorRows]);
   const materialOptions = useMemo(() => materialRows, [materialRows]);
   const rawMaterialCategoryOptions = useMemo(
-    () =>
-      uniqueValues([
-        ...categoryRows
-          .filter((category) => category.type.toLowerCase() === "raw material")
-          .map((category) => category.name),
-        ...materialOptions.map((item) => item.category),
-      ]),
-    [categoryRows, materialOptions, vendorOptions]
+    () => categoryNames(categoryRows, "Raw Material", materialOptions.map((item) => item.category)),
+    [categoryRows, materialOptions]
   );
   const vendorCategoryOptions = useMemo(
-    () =>
-      uniqueValues([
-        ...categoryRows.map((category) => category.name),
-        ...vendorOptions.map((vendor) => vendor.category),
-      ]),
+    () => categoryNames(categoryRows, "Vendor", vendorOptions.map((vendor) => vendor.category)),
     [categoryRows, vendorOptions]
   );
   const categoryOptions = useMemo(
@@ -3098,6 +3374,7 @@ function DailyVendorsPage({
   const [modalMode, setModalMode] = useState(null);
   const [editingPurchaseId, setEditingPurchaseId] = useState("");
   const [message, setMessage] = useState("");
+  const [importingCsv, setImportingCsv] = useState(false);
   const [form, setForm] = useState({
     date: today(),
     vendor: vendorOptions[0]?.name || "",
@@ -3110,11 +3387,11 @@ function DailyVendorsPage({
     mode: "Cash",
     notes: "",
   });
-  const selectedCategoryKey = form.category.trim().toLowerCase();
+  const selectedCategoryKey = lookupKey(form.category);
   const vendorMatchesCategory = (vendor, categoryKey = selectedCategoryKey) =>
-    !categoryKey || vendor.category.trim().toLowerCase() === categoryKey;
+    !categoryKey || lookupKey(vendor.category) === categoryKey;
   const materialMatchesCategory = (material, categoryKey = selectedCategoryKey) =>
-    !categoryKey || material.category.trim().toLowerCase() === categoryKey;
+    !categoryKey || lookupKey(material.category) === categoryKey;
   const vendorsByCategory = useMemo(
     () => vendorOptions.filter((vendor) => vendorMatchesCategory(vendor)),
     [selectedCategoryKey, vendorOptions]
@@ -3125,18 +3402,18 @@ function DailyVendorsPage({
   );
   const vendorSelectOptions = useMemo(() => {
     const options = [...vendorsByCategory];
-    if (form.vendor && !options.some((vendor) => vendor.name === form.vendor)) {
+    if (editingPurchaseId && form.vendor && !options.some((vendor) => sameText(vendor.name, form.vendor))) {
       options.unshift({ id: `current-${form.vendor}`, name: form.vendor, category: form.category });
     }
     return options;
-  }, [form.category, form.vendor, vendorsByCategory]);
+  }, [editingPurchaseId, form.category, form.vendor, vendorsByCategory]);
   const materialSelectOptions = useMemo(() => {
     const options = [...materialsByCategory];
-    if (form.material && !options.some((material) => material.name === form.material)) {
+    if (editingPurchaseId && form.material && !options.some((material) => sameText(material.name, form.material))) {
       options.unshift({ id: `current-${form.material}`, name: form.material, category: form.category, unit: form.unit, rate: form.rate });
     }
     return options;
-  }, [form.category, form.material, form.rate, form.unit, materialsByCategory]);
+  }, [editingPurchaseId, form.category, form.material, form.rate, form.unit, materialsByCategory]);
   const unitOptions = useMemo(
     () => uniqueValues([form.unit, ...materialOptions.map((item) => item.unit), ...UNIT_OPTIONS]),
     [form.unit, materialOptions]
@@ -3153,7 +3430,7 @@ function DailyVendorsPage({
   });
 
   useEffect(() => {
-    const selected = materialOptions.find((item) => item.name === form.material);
+    const selected = byName(materialOptions, form.material);
     if (editingPurchaseId || selected || !materialOptions[0]) return;
     const first = materialOptions[0];
     setForm((current) => ({
@@ -3164,6 +3441,18 @@ function DailyVendorsPage({
       rate: first.rate || current.rate,
     }));
   }, [editingPurchaseId, form.material, materialOptions]);
+
+  useEffect(() => {
+    if (editingPurchaseId || !form.category) return;
+    const categoryKey = lookupKey(form.category);
+    const currentVendor = byName(vendorOptions, form.vendor);
+    if (currentVendor && vendorMatchesCategory(currentVendor, categoryKey)) return;
+    const nextVendor = vendorOptions.find((vendor) => vendorMatchesCategory(vendor, categoryKey));
+    const nextVendorName = nextVendor?.name || "";
+    if (nextVendorName !== form.vendor) {
+      setForm((current) => ({ ...current, vendor: nextVendorName }));
+    }
+  }, [editingPurchaseId, form.category, form.vendor, vendorOptions]);
 
   async function savePurchase(event) {
     event.preventDefault();
@@ -3232,9 +3521,9 @@ function DailyVendorsPage({
       setModalMode("vendor");
       return;
     }
-    const selected = vendorOptions.find((vendor) => vendor.name === value);
+    const selected = byName(vendorOptions, value);
     const nextCategory = selected?.category || form.category;
-    const currentMaterial = materialOptions.find((material) => material.name === form.material);
+    const currentMaterial = byName(materialOptions, form.material);
     const materialStillMatches = currentMaterial && materialMatchesCategory(currentMaterial, nextCategory.trim().toLowerCase());
     const nextMaterial = materialStillMatches
       ? currentMaterial
@@ -3255,9 +3544,9 @@ function DailyVendorsPage({
       setModalMode("category");
       return;
     }
-    const categoryKey = value.trim().toLowerCase();
-    const currentVendor = vendorOptions.find((vendor) => vendor.name === form.vendor);
-    const currentMaterial = materialOptions.find((material) => material.name === form.material);
+    const categoryKey = lookupKey(value);
+    const currentVendor = byName(vendorOptions, form.vendor);
+    const currentMaterial = byName(materialOptions, form.material);
     const nextVendor = currentVendor && vendorMatchesCategory(currentVendor, categoryKey)
       ? currentVendor
       : vendorOptions.find((vendor) => vendorMatchesCategory(vendor, categoryKey));
@@ -3287,11 +3576,18 @@ function DailyVendorsPage({
       setModalMode("material");
       return;
     }
-    const selected = materialOptions.find((item) => item.name === value);
+    const selected = byName(materialOptions, value);
+    const nextCategory = selected?.category || form.category;
+    const currentVendor = byName(vendorOptions, form.vendor);
+    const vendorStillMatches = currentVendor && vendorMatchesCategory(currentVendor, lookupKey(nextCategory));
+    const nextVendor = vendorStillMatches
+      ? currentVendor
+      : vendorOptions.find((vendor) => vendorMatchesCategory(vendor, lookupKey(nextCategory)));
     setForm({
       ...form,
       material: value,
-      category: selected?.category || form.category,
+      category: nextCategory,
+      vendor: nextVendor?.name || "",
       unit: selected?.unit || form.unit,
       rate: selected?.rate || form.rate,
     });
@@ -3360,10 +3656,115 @@ function DailyVendorsPage({
       ])
   );
 
+  function normalizeDailyVendorImportRow(row) {
+    const vendor = byName(vendorOptions, row.vendor || row.vendorname || row.vendor_name);
+    const material = byName(materialOptions, row.material || row.materialname || row.raw_material || row.item);
+    const category = row.category || material?.category || vendor?.category || "";
+    const qty = Number(row.qty || row.quantity || 0);
+    const rate = Number(row.rate || row.price || material?.rate || 0);
+    return normalizeVendorPurchase({
+      date: row.date || row.purchase_date || row.purchasedate || today(),
+      vendorId: vendor?.id || "",
+      vendor: row.vendor || row.vendorname || row.vendor_name || vendor?.name || "",
+      material: row.material || row.materialname || row.raw_material || row.item || material?.name || "",
+      category,
+      qty,
+      unit: row.unit || material?.unit || "kg",
+      rate,
+      amount: row.amount || qty * rate,
+      paid: row.paid || row.paid_today || row.paidtoday || 0,
+      mode: row.mode || "Cash",
+      notes: row.notes || "",
+    });
+  }
+
+  async function importDailyVendorCsv(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setImportingCsv(true);
+    try {
+      const importedRows = csvToRecords(await file.text())
+        .map(normalizeDailyVendorImportRow)
+        .filter((record) => record.vendor.trim() && record.material.trim());
+      const createdVendors = new Map();
+      const createdMaterials = new Map();
+
+      for (const record of importedRows) {
+        let vendor = byName(vendorOptions, record.vendor) || createdVendors.get(lookupKey(record.vendor));
+        if (!vendor) {
+          const result = await onSaveVendor({ name: record.vendor, category: record.category, contact: "" });
+          vendor = result.record || { id: "", name: record.vendor, category: record.category };
+          createdVendors.set(lookupKey(record.vendor), vendor);
+        }
+
+        let material = byName(materialOptions, record.material) || createdMaterials.get(lookupKey(record.material));
+        if (!material) {
+          const result = await onSaveMaterial({
+            name: record.material,
+            category: record.category,
+            stock: 0,
+            unit: record.unit,
+            min: 0,
+            rate: record.rate,
+          });
+          material = result.record || { id: "", name: record.material, category: record.category, unit: record.unit, rate: record.rate };
+          createdMaterials.set(lookupKey(record.material), material);
+        }
+
+        await onSavePurchase({
+          ...record,
+          vendorId: vendor?.id || record.vendorId,
+          vendor: vendor?.name || record.vendor,
+          material: material?.name || record.material,
+          category: record.category || material?.category || vendor?.category || "",
+          unit: record.unit || material?.unit || "kg",
+          rate: Number(record.rate || material?.rate || 0),
+        });
+      }
+      setMessage(`Imported ${importedRows.length} daily vendor rows`);
+    } catch {
+      setMessage("Daily vendor CSV import failed. Check the headings and values.");
+    } finally {
+      setImportingCsv(false);
+      event.target.value = "";
+    }
+  }
+
+  function exportDailyVendorCsv() {
+    const records = purchaseRows.map((record) => ({
+      date: record.date,
+      vendor: record.vendor,
+      category: record.category,
+      material: record.material,
+      qty: record.qty,
+      unit: record.unit,
+      rate: record.rate,
+      paid: record.paid,
+      mode: record.mode,
+      notes: record.notes,
+    }));
+    downloadTextFile("daily-vendors-export.csv", recordsToCsv(DAILY_VENDOR_CSV_COLUMNS, records));
+  }
+
   return (
     <Page>
       <Panel title="Daily vendor" subtitle="Date wise purchase and payment">
         {message && <p className="db-message">{message}</p>}
+        <div className="inventory-tools">
+          <input ref={csvInputRef} type="file" accept=".csv,text/csv" onChange={importDailyVendorCsv} />
+          <button className="ghost-button" type="button" onClick={() => csvInputRef.current?.click()} disabled={importingCsv}>
+            <Upload size={16} />
+            {importingCsv ? "Importing..." : "Import CSV"}
+          </button>
+          <button className="ghost-button" type="button" onClick={() => downloadTextFile("daily-vendors-demo.csv", DAILY_VENDOR_DEMO_CSV)}>
+            <Download size={16} />
+            Demo CSV
+          </button>
+          <button className="ghost-button" type="button" onClick={exportDailyVendorCsv} disabled={!purchaseRows.length}>
+            <Download size={16} />
+            Export CSV
+          </button>
+        </div>
         <form className="form-grid purchase-form" onSubmit={savePurchase} ref={formRef}>
           <label>DATE<input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></label>
           <label>VENDOR<select value={form.vendor} onChange={(event) => changeVendor(event.target.value)}><option value="">Select vendor</option><option value="__add_vendor__">Add vendor</option>{vendorSelectOptions.map((vendor) => <option key={vendor.id} value={vendor.name}>{vendor.name}</option>)}</select></label>
@@ -3463,6 +3864,10 @@ function EmployeesPage({
   const effectiveSearch = query.trim() || globalSearch;
   const filtered = staff.filter((employee) =>
     matchesSearch(effectiveSearch, [employee.name, employee.role, employee.contact, employee.address, employee.joining])
+  );
+  const employeeRoleOptions = useMemo(
+    () => uniqueValues(["Karigar", "Counter", "Manager", "Cleaner", "Driver", ...staff.map((employee) => employee.role), form.role]),
+    [form.role, staff]
   );
   const selectedAttendanceRows = selected
     ? attendanceRows
@@ -3768,7 +4173,9 @@ function EmployeesPage({
             </label>
             <label className="field">
               <span>Role</span>
-              <input value={form.role} onChange={(event) => updateForm("role", event.target.value)} />
+              <select value={form.role} onChange={(event) => updateForm("role", event.target.value)}>
+                {employeeRoleOptions.map((role) => <option key={role} value={role}>{role}</option>)}
+              </select>
             </label>
             <label className="field">
               <span>Contact</span>
@@ -3890,17 +4297,15 @@ function AttendancePage({ staff, attendanceRows = [], onSaveAttendance, globalSe
 }
 
 function VendorsPage({ vendorRows, categoryRows, onSaveVendor, onUpdateVendor, onDeleteVendor, globalSearch = "" }) {
+  const csvInputRef = useRef(null);
   const categoryOptions = useMemo(
-    () =>
-      uniqueValues([
-        ...categoryRows.map((category) => category.name),
-        ...vendorRows.map((vendor) => vendor.category),
-      ]),
+    () => categoryNames(categoryRows, "Vendor", vendorRows.map((vendor) => vendor.category)),
     [categoryRows, vendorRows]
   );
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: "", category: "", contact: "" });
   const [message, setMessage] = useState("");
+  const [importingCsv, setImportingCsv] = useState(false);
   const filteredVendorRows = vendorRows.filter((vendor) =>
     matchesSearch(globalSearch, [
       vendor.name,
@@ -3931,10 +4336,73 @@ function VendorsPage({ vendorRows, categoryRows, onSaveVendor, onUpdateVendor, o
     setMessage("Vendor deleted");
   }
 
+  function normalizeVendorImportRow(row) {
+    return normalizeVendor({
+      name: row.name || row.vendor || row.vendor_name || "",
+      category: row.category || row.type || "",
+      contact: row.contact || row.phone || "",
+    });
+  }
+
+  async function importVendorCsv(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setImportingCsv(true);
+    try {
+      const importedRows = csvToRecords(await file.text())
+        .map(normalizeVendorImportRow)
+        .filter((record) => record.name.trim());
+      const uniqueRows = uniqueBy(importedRows, (record) => lookupKey(record.name));
+      const existingByName = new Map(vendorRows.map((vendor) => [lookupKey(vendor.name), vendor]));
+      let created = 0;
+      let updated = 0;
+      for (const record of uniqueRows) {
+        const existing = existingByName.get(lookupKey(record.name));
+        if (existing) {
+          await onUpdateVendor({ ...existing, ...record, id: existing.id });
+          updated += 1;
+        } else {
+          await onSaveVendor(record);
+          created += 1;
+        }
+      }
+      setMessage(`Imported ${uniqueRows.length} vendors (${created} new, ${updated} updated)`);
+    } catch {
+      setMessage("Vendor CSV import failed. Check the headings and values.");
+    } finally {
+      setImportingCsv(false);
+      event.target.value = "";
+    }
+  }
+
+  function exportVendorsCsv() {
+    const records = vendorRows.map((vendor) => ({
+      name: vendor.name,
+      category: vendor.category,
+      contact: vendor.contact === "-" ? "" : vendor.contact,
+    }));
+    downloadTextFile("vendors-export.csv", recordsToCsv(VENDOR_CSV_COLUMNS, records));
+  }
+
   return (
     <Page>
       <Panel title="Vendor management" subtitle="Vendor categories and contacts" action="Add vendor" onAction={() => openVendorForm()}>
         {message && <p className="db-message">{message}</p>}
+        <div className="inventory-tools">
+          <input ref={csvInputRef} type="file" accept=".csv,text/csv" onChange={importVendorCsv} />
+          <button className="ghost-button" type="button" onClick={() => csvInputRef.current?.click()} disabled={importingCsv}>
+            <Upload size={16} />
+            {importingCsv ? "Importing..." : "Import CSV"}
+          </button>
+          <button className="ghost-button" type="button" onClick={() => downloadTextFile("vendors-demo.csv", VENDOR_DEMO_CSV)}>
+            <Download size={16} />
+            Demo CSV
+          </button>
+          <button className="ghost-button" type="button" onClick={exportVendorsCsv} disabled={!vendorRows.length}>
+            <Download size={16} />
+            Export CSV
+          </button>
+        </div>
         <DataTable
           columns={["Vendor", "Category", "Contact", "Purchases", "Pending", "Last paid", "Action"]}
           rows={filteredVendorRows.map((vendor) => [
@@ -3965,11 +4433,17 @@ function VendorsPage({ vendorRows, categoryRows, onSaveVendor, onUpdateVendor, o
   );
 }
 
-function ExpensesPage({ expenseRows, onSaveExpense, onUpdateExpense, onDeleteExpense, globalSearch = "" }) {
+function ExpensesPage({ expenseRows, categoryRows = [], onSaveExpense, onUpdateExpense, onDeleteExpense, globalSearch = "" }) {
+  const csvInputRef = useRef(null);
   const [dateFilter, setDateFilter] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ expenseDate: today(), label: "", category: "", mode: "Cash", amount: 0 });
   const [message, setMessage] = useState("");
+  const [importingCsv, setImportingCsv] = useState(false);
+  const expenseCategoryOptions = useMemo(
+    () => categoryNames(categoryRows, "Expense", expenseRows.map((expense) => expense.category)),
+    [categoryRows, expenseRows]
+  );
   const filtered = expenseRows.filter(
     (expense) =>
       (!dateFilter || expense.date === dateFilter) &&
@@ -3981,7 +4455,7 @@ function ExpensesPage({ expenseRows, onSaveExpense, onUpdateExpense, onDeleteExp
     setForm(
       expense
         ? { ...expense, expenseDate: expense.expenseDate || expense.date, label: expense.label || expense.title }
-        : { expenseDate: today(), label: "", category: "", mode: "Cash", amount: 0 }
+        : { expenseDate: today(), label: "", category: expenseCategoryOptions[0] || "", mode: "Cash", amount: 0 }
     );
     setShowForm(true);
   }
@@ -4000,6 +4474,47 @@ function ExpensesPage({ expenseRows, onSaveExpense, onUpdateExpense, onDeleteExp
     setMessage("Expense deleted");
   }
 
+  function normalizeExpenseImportRow(row) {
+    return normalizeExpense({
+      expenseDate: row.expensedate || row.expense_date || row.date || today(),
+      label: row.label || row.expense || row.title || "",
+      category: row.category || "",
+      mode: row.mode || "Cash",
+      amount: row.amount || 0,
+    });
+  }
+
+  async function importExpenseCsv(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setImportingCsv(true);
+    try {
+      const importedRows = csvToRecords(await file.text())
+        .map(normalizeExpenseImportRow)
+        .filter((record) => record.label.trim());
+      for (const record of importedRows) {
+        await onSaveExpense(record);
+      }
+      setMessage(`Imported ${importedRows.length} expense rows`);
+    } catch {
+      setMessage("Expense CSV import failed. Check the headings and values.");
+    } finally {
+      setImportingCsv(false);
+      event.target.value = "";
+    }
+  }
+
+  function exportExpensesCsv() {
+    const records = expenseRows.map((expense) => ({
+      expenseDate: expense.expenseDate || expense.date,
+      label: expense.label || expense.title,
+      category: expense.category,
+      mode: expense.mode,
+      amount: expense.amount,
+    }));
+    downloadTextFile("expenses-export.csv", recordsToCsv(EXPENSE_CSV_COLUMNS, records));
+  }
+
   return (
     <Page>
       <Panel title="Expense management" subtitle="Daily shop expenses" action="Add expense" onAction={() => openExpenseForm()}>
@@ -4011,6 +4526,21 @@ function ExpensesPage({ expenseRows, onSaveExpense, onUpdateExpense, onDeleteExp
           <strong className="total-chip">{money(total)}</strong>
         </div>
         {message && <p className="db-message">{message}</p>}
+        <div className="inventory-tools">
+          <input ref={csvInputRef} type="file" accept=".csv,text/csv" onChange={importExpenseCsv} />
+          <button className="ghost-button" type="button" onClick={() => csvInputRef.current?.click()} disabled={importingCsv}>
+            <Upload size={16} />
+            {importingCsv ? "Importing..." : "Import CSV"}
+          </button>
+          <button className="ghost-button" type="button" onClick={() => downloadTextFile("expenses-demo.csv", EXPENSE_DEMO_CSV)}>
+            <Download size={16} />
+            Demo CSV
+          </button>
+          <button className="ghost-button" type="button" onClick={exportExpensesCsv} disabled={!expenseRows.length}>
+            <Download size={16} />
+            Export CSV
+          </button>
+        </div>
         <DataTable
           columns={["Date", "Expense", "Category", "Mode", "Amount", "Action"]}
           rows={filtered.map((expense) => [
@@ -4031,7 +4561,7 @@ function ExpensesPage({ expenseRows, onSaveExpense, onUpdateExpense, onDeleteExp
           <form className="modal-form grid-form" onSubmit={submitExpense}>
             <label className="field"><span>Expense</span><input required value={form.label} onChange={(event) => setForm({ ...form, label: event.target.value })} /></label>
             <label className="field"><span>Date</span><input type="date" value={form.expenseDate} onChange={(event) => setForm({ ...form, expenseDate: event.target.value })} /></label>
-            <label className="field"><span>Category</span><input value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} /></label>
+            <label className="field"><span>Category</span><select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}><option value="">Select category</option>{uniqueValues([...expenseCategoryOptions, form.category]).map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
             <label className="field"><span>Mode</span><select value={form.mode} onChange={(event) => setForm({ ...form, mode: event.target.value })}><option>Cash</option><option>UPI</option><option>Bank</option></select></label>
             <label className="field full"><span>Amount</span><input type="number" value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value })} /></label>
             <button className="action-button full" type="submit">{form.id ? "Update expense" : "Save expense"}</button>
@@ -4053,14 +4583,10 @@ function CategoriesPage({
   onDeleteMaterial,
   globalSearch = "",
 }) {
+  const categoryCsvInputRef = useRef(null);
+  const materialCsvInputRef = useRef(null);
   const rawMaterialCategoryOptions = useMemo(
-    () =>
-      uniqueValues([
-        ...categoryRows
-          .filter((category) => category.type.toLowerCase() === "raw material")
-          .map((category) => category.name),
-        ...materialRows.map((material) => material.category),
-      ]),
+    () => categoryNames(categoryRows, "Raw Material", materialRows.map((material) => material.category)),
     [categoryRows, materialRows]
   );
   const rawMaterialUnitOptions = useMemo(
@@ -4080,6 +4606,8 @@ function CategoriesPage({
     rate: 0,
   });
   const [message, setMessage] = useState("");
+  const [importingCategoryCsv, setImportingCategoryCsv] = useState(false);
+  const [importingMaterialCsv, setImportingMaterialCsv] = useState(false);
   const filteredCategoryRows = categoryRows.filter((category) =>
     matchesSearch(globalSearch, [category.type, category.name, category.items, category.margin])
   );
@@ -4148,6 +4676,122 @@ function CategoriesPage({
     setMessage("Raw material deleted");
   }
 
+  function normalizeCategoryImportRow(row) {
+    return normalizeCategory({
+      type: row.type || row.category_type || row.categorytype || "Product",
+      name: row.name || row.category || "",
+    });
+  }
+
+  async function importCategoryCsv(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setImportingCategoryCsv(true);
+    try {
+      const importedRows = csvToRecords(await file.text())
+        .map(normalizeCategoryImportRow)
+        .filter((record) => record.name.trim());
+      const uniqueRows = uniqueBy(importedRows, (record) => `${lookupKey(record.type)}:${lookupKey(record.name)}`);
+      const existingByTypeName = new Map(categoryRows.map((category) => [`${lookupKey(category.type)}:${lookupKey(category.name)}`, category]));
+      let created = 0;
+      let updated = 0;
+      for (const record of uniqueRows) {
+        const key = `${lookupKey(record.type)}:${lookupKey(record.name)}`;
+        const existing = existingByTypeName.get(key);
+        if (existing) {
+          await onUpdateCategory({ ...existing, ...record, id: existing.id });
+          updated += 1;
+        } else {
+          await onSaveCategory(record);
+          created += 1;
+        }
+      }
+      setMessage(`Imported ${uniqueRows.length} categories (${created} new, ${updated} updated)`);
+    } catch {
+      setMessage("Category CSV import failed. Check the headings and values.");
+    } finally {
+      setImportingCategoryCsv(false);
+      event.target.value = "";
+    }
+  }
+
+  function exportCategoriesCsv() {
+    const records = categoryRows.map((category) => ({
+      type: category.type,
+      name: category.name,
+    }));
+    downloadTextFile("categories-export.csv", recordsToCsv(CATEGORY_CSV_COLUMNS, records));
+  }
+
+  function normalizeMaterialImportRow(row) {
+    return normalizeMaterial({
+      name: row.name || row.material || row.raw_material || row.item || "",
+      category: row.category || row.type || "",
+      stock: row.stock || row.qty || row.quantity || 0,
+      unit: row.unit || "kg",
+      min: row.min || row.minimum || row.minimum_stock || row.minimumstock || 0,
+      rate: row.rate || row.price || 0,
+    });
+  }
+
+  async function importMaterialCsv(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setImportingMaterialCsv(true);
+    try {
+      const importedRows = csvToRecords(await file.text())
+        .map(normalizeMaterialImportRow)
+        .filter((record) => record.name.trim());
+      const uniqueRows = uniqueBy(importedRows, (record) => lookupKey(record.name));
+      const existingByName = new Map(materialRows.map((material) => [lookupKey(material.name), material]));
+      const existingCategories = new Set(
+        categoryRows
+          .filter((category) => sameText(category.type, "Raw Material"))
+          .map((category) => lookupKey(category.name))
+      );
+
+      for (const category of uniqueValues(uniqueRows.map((record) => record.category))) {
+        const key = lookupKey(category);
+        if (!existingCategories.has(key)) {
+          await onSaveCategory({ type: "Raw Material", name: category });
+          existingCategories.add(key);
+        }
+      }
+
+      let created = 0;
+      let updated = 0;
+      for (const record of uniqueRows) {
+        const existing = existingByName.get(lookupKey(record.name));
+        if (existing) {
+          await onUpdateMaterial({ ...existing, ...record, id: existing.id });
+          updated += 1;
+        } else {
+          await onSaveMaterial(record);
+          created += 1;
+        }
+      }
+      setMessage(`Imported ${uniqueRows.length} raw materials (${created} new, ${updated} updated)`);
+      setActiveTab("materials");
+    } catch {
+      setMessage("Raw material CSV import failed. Check the headings and values.");
+    } finally {
+      setImportingMaterialCsv(false);
+      event.target.value = "";
+    }
+  }
+
+  function exportMaterialsCsv() {
+    const records = materialRows.map((material) => ({
+      name: material.name,
+      category: material.category,
+      stock: material.stock,
+      unit: material.unit,
+      min: material.min,
+      rate: material.rate,
+    }));
+    downloadTextFile("raw-material-master-export.csv", recordsToCsv(INVENTORY_CSV_COLUMNS, records));
+  }
+
   return (
     <Page>
       <Panel
@@ -4173,6 +4817,41 @@ function CategoriesPage({
           </button>
         </div>
         {message && <p className="db-message">{message}</p>}
+        <div className="inventory-tools">
+          {activeTab === "categories" ? (
+            <>
+              <input ref={categoryCsvInputRef} type="file" accept=".csv,text/csv" onChange={importCategoryCsv} />
+              <button className="ghost-button" type="button" onClick={() => categoryCsvInputRef.current?.click()} disabled={importingCategoryCsv}>
+                <Upload size={16} />
+                {importingCategoryCsv ? "Importing..." : "Import CSV"}
+              </button>
+              <button className="ghost-button" type="button" onClick={() => downloadTextFile("categories-demo.csv", CATEGORY_DEMO_CSV)}>
+                <Download size={16} />
+                Demo CSV
+              </button>
+              <button className="ghost-button" type="button" onClick={exportCategoriesCsv} disabled={!categoryRows.length}>
+                <Download size={16} />
+                Export CSV
+              </button>
+            </>
+          ) : (
+            <>
+              <input ref={materialCsvInputRef} type="file" accept=".csv,text/csv" onChange={importMaterialCsv} />
+              <button className="ghost-button" type="button" onClick={() => materialCsvInputRef.current?.click()} disabled={importingMaterialCsv}>
+                <Upload size={16} />
+                {importingMaterialCsv ? "Importing..." : "Import CSV"}
+              </button>
+              <button className="ghost-button" type="button" onClick={() => downloadTextFile("raw-material-master-demo.csv", INVENTORY_DEMO_CSV)}>
+                <Download size={16} />
+                Demo CSV
+              </button>
+              <button className="ghost-button" type="button" onClick={exportMaterialsCsv} disabled={!materialRows.length}>
+                <Download size={16} />
+                Export CSV
+              </button>
+            </>
+          )}
+        </div>
         {activeTab === "categories" ? (
           <DataTable
             columns={["Type", "Name"]}
@@ -4206,7 +4885,7 @@ function CategoriesPage({
       {showCategoryForm && (
         <Modal title={categoryForm.id ? "Edit category" : "Add category"} eyebrow="Category record" onClose={() => setShowCategoryForm(false)}>
           <form className="modal-form grid-form" onSubmit={submitCategory}>
-            <label className="field"><span>Type</span><select value={categoryForm.type} onChange={(event) => setCategoryForm({ ...categoryForm, type: event.target.value })}><option>Product</option><option>Vendor</option><option>Raw Material</option><option>Expense</option></select></label>
+            <label className="field"><span>Type</span><select value={categoryForm.type} onChange={(event) => setCategoryForm({ ...categoryForm, type: event.target.value })}>{CATEGORY_TYPE_OPTIONS.map((type) => <option key={type}>{type}</option>)}</select></label>
             <label className="field"><span>Name</span><input required value={categoryForm.name} onChange={(event) => setCategoryForm({ ...categoryForm, name: event.target.value })} /></label>
             <button className="action-button full" type="submit">{categoryForm.id ? "Update category" : "Save category"}</button>
           </form>
@@ -4241,10 +4920,12 @@ function CategoriesPage({
 }
 
 function UsersPage({ userRows, permissionRows, onSaveUser, onUpdateUser, onDeleteUser, onSavePermission, globalSearch = "" }) {
+  const csvInputRef = useRef(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ username: "", password: "", name: "", role: "accountant", status: "Active" });
   const [selectedRole, setSelectedRole] = useState("admin");
   const [message, setMessage] = useState("");
+  const [importingCsv, setImportingCsv] = useState(false);
   const filteredUserRows = userRows.filter((user) =>
     matchesSearch(globalSearch, [user.username, user.name, user.role, user.status])
   );
@@ -4287,10 +4968,82 @@ function UsersPage({ userRows, permissionRows, onSaveUser, onUpdateUser, onDelet
     setMessage("User deleted");
   }
 
+  function normalizeUserImportRow(row) {
+    const role = lookupKey(row.role || "accountant") || "accountant";
+    return {
+      username: row.username || row.user || "",
+      password: row.password || "",
+      name: row.name || row.full_name || row.fullname || row.username || "",
+      role,
+      status: row.status || "Active",
+    };
+  }
+
+  async function importUsersCsv(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setImportingCsv(true);
+    try {
+      const importedRows = csvToRecords(await file.text())
+        .map(normalizeUserImportRow)
+        .filter((record) => record.username.trim());
+      const uniqueRows = uniqueBy(importedRows, (record) => lookupKey(record.username));
+      const existingByUsername = new Map(userRows.map((user) => [lookupKey(user.username), user]));
+      let created = 0;
+      let updated = 0;
+      let skipped = 0;
+
+      for (const record of uniqueRows) {
+        const existing = existingByUsername.get(lookupKey(record.username));
+        if (existing) {
+          await onUpdateUser({ ...existing, ...record, id: existing.id });
+          updated += 1;
+        } else if (record.password) {
+          await onSaveUser(record);
+          created += 1;
+        } else {
+          skipped += 1;
+        }
+      }
+      setMessage(`Imported ${created + updated} users (${created} new, ${updated} updated${skipped ? `, ${skipped} skipped without password` : ""})`);
+    } catch {
+      setMessage("User CSV import failed. Check the headings and values.");
+    } finally {
+      setImportingCsv(false);
+      event.target.value = "";
+    }
+  }
+
+  function exportUsersCsv() {
+    const records = userRows.map((user) => ({
+      username: user.username,
+      password: "",
+      name: user.name,
+      role: user.role,
+      status: user.status,
+    }));
+    downloadTextFile("users-export.csv", recordsToCsv(USER_CSV_COLUMNS, records));
+  }
+
   return (
     <Page>
       <Panel title="User management" subtitle="ERP users and roles" action="Create user" onAction={() => openUserForm()}>
         {message && <p className="db-message">{message}</p>}
+        <div className="inventory-tools">
+          <input ref={csvInputRef} type="file" accept=".csv,text/csv" onChange={importUsersCsv} />
+          <button className="ghost-button" type="button" onClick={() => csvInputRef.current?.click()} disabled={importingCsv}>
+            <Upload size={16} />
+            {importingCsv ? "Importing..." : "Import CSV"}
+          </button>
+          <button className="ghost-button" type="button" onClick={() => downloadTextFile("users-demo.csv", USER_DEMO_CSV)}>
+            <Download size={16} />
+            Demo CSV
+          </button>
+          <button className="ghost-button" type="button" onClick={exportUsersCsv} disabled={!userRows.length}>
+            <Download size={16} />
+            Export CSV
+          </button>
+        </div>
         <DataTable
           columns={["User", "Name", "Role", "Status", "Action"]}
           rows={filteredUserRows.map((user) => [
