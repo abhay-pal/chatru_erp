@@ -167,10 +167,14 @@ function normalizeSalesRecord(record) {
   };
 }
 
+function sameName(a, b) {
+  return String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+}
+
 function toSalesPayload(bill, products) {
   const items = bill.items
     .map((item) => {
-      const product = products.find((entry) => entry.name === item.product);
+      const product = products.find((entry) => sameName(entry.name, item.product));
       return product ? { productId: product.id, qty: Number(item.qty || 0) } : null;
     })
     .filter(Boolean);

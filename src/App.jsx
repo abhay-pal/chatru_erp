@@ -144,6 +144,12 @@ function quantity(value) {
   return Number(value || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 });
 }
 
+function numberInputValue(value, digits = 3) {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return "";
+  return Number(numberValue.toFixed(digits)).toString();
+}
+
 function parseCsv(text) {
   const rows = [];
   let row = [];
@@ -1877,6 +1883,7 @@ function FinanceDashboard({ salesBills, staff, expenseRows, vendorRows, vendorPu
 function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = "" }) {
   const saleProducts = productRows;
   const [items, setItems] = useState([]);
+  const [productSearch, setProductSearch] = useState("");
   const [shouldSeedItem, setShouldSeedItem] = useState(true);
   const [discount, setDiscount] = useState(0);
   const [gst, setGst] = useState(false);
@@ -1888,14 +1895,46 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
   const [billNo, setBillNo] = useState("");
   const [savedBillKey, setSavedBillKey] = useState("");
   const [savingBill, setSavingBill] = useState(false);
+  const productOptionId = "sales-slip-product-options";
+  const productOptions = useMemo(() => {
+    const filtered = saleProducts.filter((product) =>
+      matchesSearch(productSearch, [product.name, product.category, product.unit, product.rate])
+    );
+    return productSearch.trim() ? filtered : saleProducts;
+  }, [productSearch, saleProducts]);
 
   const rows = items.map((item) => {
-    const product = saleProducts.find((entry) => entry.name === item.product) || saleProducts[0];
+    const productName = item.product || "";
+    const product = saleProducts.find((entry) => sameText(entry.name, productName));
+    const hasManualAmount = item.amount !== undefined && item.amount !== "";
     if (!product) {
-      return { ...item, rate: 0, unit: "", total: 0 };
+      return {
+        ...item,
+        product: productName,
+        qty: Number(item.qty || 0),
+        qtyInput: item.qty ?? "",
+        amountInput: item.amount ?? "",
+        rate: 0,
+        unit: "",
+        total: 0,
+        invalid: true,
+      };
     }
-    const total = product.rate * Number(item.qty || 0);
-    return { ...item, rate: product.rate, unit: product.unit, total };
+    const rate = Number(product.rate || 0);
+    const enteredAmount = hasManualAmount ? Number(item.amount || 0) : null;
+    const qty = hasManualAmount && rate > 0 ? enteredAmount / rate : Number(item.qty || 0);
+    const total = hasManualAmount ? enteredAmount : rate * qty;
+    return {
+      ...item,
+      product: product.name,
+      qty,
+      qtyInput: hasManualAmount ? numberInputValue(qty, 3) : item.qty ?? "",
+      amountInput: hasManualAmount ? item.amount : numberInputValue(total, 2),
+      rate,
+      unit: product.unit,
+      total,
+      invalid: false,
+    };
   });
   const subtotal = rows.reduce((sum, item) => sum + item.total, 0);
   const tax = gst ? (subtotal - discount) * 0.05 : 0;
@@ -1970,8 +2009,51 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
     }
   }, [items.length, saleProducts, shouldSeedItem]);
 
-  function updateItem(index, patch) {
-    setItems((records) => records.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
+  function changeSaleProduct(index, productName) {
+    setItems((records) =>
+      records.map((item, itemIndex) => {
+        if (itemIndex !== index) return item;
+        const product = saleProducts.find((entry) => sameText(entry.name, productName));
+        if (!product) return { ...item, product: productName };
+        const amount = item.amount;
+        const rate = Number(product.rate || 0);
+        return {
+          ...item,
+          product: product.name,
+          qty: amount !== undefined && amount !== "" && rate > 0
+            ? numberInputValue(Number(amount || 0) / rate, 3)
+            : item.qty,
+        };
+      })
+    );
+    setSavedBillKey("");
+  }
+
+  function changeSaleQty(index, qty) {
+    setItems((records) =>
+      records.map((item, itemIndex) => {
+        if (itemIndex !== index) return item;
+        const { amount, ...rest } = item;
+        return { ...rest, qty };
+      })
+    );
+    setSavedBillKey("");
+  }
+
+  function changeSaleAmount(index, amount) {
+    setItems((records) =>
+      records.map((item, itemIndex) => {
+        if (itemIndex !== index) return item;
+        if (amount === "") return { ...item, amount: "" };
+        const product = saleProducts.find((entry) => sameText(entry.name, item.product));
+        const rate = Number(product?.rate || 0);
+        return {
+          ...item,
+          amount,
+          qty: rate > 0 ? numberInputValue(Number(amount || 0) / rate, 3) : item.qty,
+        };
+      })
+    );
     setSavedBillKey("");
   }
 
@@ -2007,6 +2089,14 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
     }
     if (!saleProducts.length || !rows.length) {
       setMessage("Add products before saving a bill.");
+      return null;
+    }
+    if (rows.some((item) => item.invalid || !item.product || !item.rate)) {
+      setMessage("Select valid products before saving a bill.");
+      return null;
+    }
+    if (rows.some((item) => Number(item.qty || 0) <= 0 || Number(item.total || 0) <= 0)) {
+      setMessage("Qty and amount must be greater than 0.");
       return null;
     }
     if (savedBillKey === currentBillKey) {
@@ -2078,8 +2168,22 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
             </div>
           </div>
           <div className="sale-lines">
+            <label className="inline-search sale-product-search">
+              <Search size={17} />
+              <input
+                value={productSearch}
+                placeholder="Search product"
+                onChange={(event) => setProductSearch(event.target.value)}
+              />
+            </label>
+            <datalist id={productOptionId}>
+              {productOptions.map((product) => (
+                <option key={product.id || product.name} value={product.name} />
+              ))}
+            </datalist>
             <div className="sale-head">
               <span>PRODUCT</span>
+              <span>AMOUNT</span>
               <span>QTY</span>
               <span>RATE</span>
               <span>TOTAL</span>
@@ -2088,17 +2192,26 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
             {!saleProducts.length && <div className="empty-state">No products found</div>}
             {rows.map((item, index) => (
               <div className="sale-line" key={`${item.product}-${index}`}>
-                <select value={item.product} onChange={(event) => updateItem(index, { product: event.target.value })}>
-                  {saleProducts.map((product) => (
-                    <option key={product.name}>{product.name}</option>
-                  ))}
-                </select>
+                <input
+                  className="sale-product-input"
+                  list={productOptionId}
+                  value={item.product}
+                  placeholder="Search product"
+                  onChange={(event) => changeSaleProduct(index, event.target.value)}
+                />
                 <input
                   type="number"
                   min="0"
-                  step="0.25"
-                  value={item.qty}
-                  onChange={(event) => updateItem(index, { qty: event.target.value })}
+                  step="0.01"
+                  value={item.amountInput}
+                  onChange={(event) => changeSaleAmount(index, event.target.value)}
+                />
+                <input
+                  type="number"
+                  min="0"
+                  step="0.001"
+                  value={item.qtyInput}
+                  onChange={(event) => changeSaleQty(index, event.target.value)}
                 />
                 <span className="sale-rate">{money(item.rate)} / {item.unit}</span>
                 <strong>{money(item.total)}</strong>
@@ -2744,6 +2857,32 @@ function InventoryUsagePage({
     }
   }, [form.materialId, materialRows]);
 
+  useEffect(() => {
+    if (!selectedMaterial) return;
+    setForm((current) => {
+      const usedQty = Number(current.usedQty || 0);
+      const wastageQty = Number(current.wastageQty || 0);
+      const unusedQty = Math.max(0, Number(selectedMaterial.stock || 0) - usedQty - wastageQty);
+      if (
+        current.materialId === selectedMaterial.id &&
+        current.materialName === selectedMaterial.name &&
+        current.category === selectedMaterial.category &&
+        current.unit === selectedMaterial.unit &&
+        Number(current.unusedQty || 0) === unusedQty
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        materialId: selectedMaterial.id,
+        materialName: selectedMaterial.name,
+        category: selectedMaterial.category,
+        unit: selectedMaterial.unit,
+        unusedQty,
+      };
+    });
+  }, [selectedMaterial?.id, selectedMaterial?.name, selectedMaterial?.category, selectedMaterial?.unit, selectedMaterial?.stock]);
+
   function changeMaterial(materialId) {
     const material = materialRows.find((item) => item.id === materialId);
     if (!material) return;
@@ -2776,6 +2915,10 @@ function InventoryUsagePage({
     }
     const payload = {
       ...form,
+      materialId: selectedMaterial?.id || form.materialId,
+      materialName: selectedMaterial?.name || form.materialName,
+      category: selectedMaterial?.category || form.category,
+      unit: selectedMaterial?.unit || form.unit,
       usedQty: Number(form.usedQty || 0),
       unusedQty: Number(form.unusedQty || 0),
       wastageQty: Number(form.wastageQty || 0),
@@ -4214,11 +4357,13 @@ function AttendancePage({ staff, attendanceRows = [], onSaveAttendance, globalSe
   const [checkIn, setCheckIn] = useState("09:00");
   const [checkOut, setCheckOut] = useState("");
   const [filterDate, setFilterDate] = useState(today());
+  const [filterStatus, setFilterStatus] = useState("");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const filteredAttendanceRows = attendanceRows.filter(
     (row) =>
       (!filterDate || row.attendanceDate === filterDate) &&
+      (!filterStatus || sameText(row.status, filterStatus)) &&
       matchesSearch(globalSearch, [row.attendanceDate, row.employeeName, row.status, row.checkIn, row.checkOut, row.notes])
   );
 
@@ -4278,6 +4423,7 @@ function AttendancePage({ staff, attendanceRows = [], onSaveAttendance, globalSe
       <Panel title="Filter wise" subtitle="Attendance report">
         <div className="filter-row">
           <label>DATE<input type="date" value={filterDate} onChange={(event) => setFilterDate(event.target.value)} /></label>
+          <label>STATUS<select value={filterStatus} onChange={(event) => setFilterStatus(event.target.value)}><option value="">All status</option><option>Present</option><option>Absent</option><option>Half Day</option><option>Leave</option></select></label>
           <button className="ghost-button" type="button" onClick={() => setFilterDate("")}>All dates</button>
         </div>
         <DataTable
