@@ -149,9 +149,11 @@ function sortSales(records) {
 function normalizeSalesRecord(record) {
   const itemText = typeof record.items === "string" ? record.items : "";
   return {
+    id: record.id ? String(record.id) : record.id,
     billNo: record.billNo || `SALE-${record.id}`,
     date: record.saleDate || record.date,
     mode: record.paymentMode || record.mode || "Cash",
+    status: record.status || "Printed",
     items: Array.isArray(record.items)
       ? record.items
       : itemText
@@ -175,7 +177,13 @@ function toSalesPayload(bill, products) {
   const items = bill.items
     .map((item) => {
       const product = products.find((entry) => sameName(entry.name, item.product));
-      return product ? { productId: product.id, qty: Number(item.qty || 0) } : null;
+      return product
+        ? {
+            productId: product.id,
+            qty: Number(item.qty || 0),
+            total: Number(item.total || 0),
+          }
+        : null;
     })
     .filter(Boolean);
 
@@ -190,6 +198,7 @@ function toSalesPayload(bill, products) {
     discount: Number(bill.discount || 0),
     taxEnabled: Number(bill.tax || 0) > 0,
     paymentMode: bill.mode || "Cash",
+    status: bill.status || "Printed",
   };
 }
 

@@ -67,6 +67,10 @@ function vendorKey(record) {
   return id ? `id:${String(id)}` : `name:${String(name).trim().toLowerCase()}`;
 }
 
+function sameText(a, b) {
+  return String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+}
+
 async function migrate() {
   if (!pool) {
     throw new Error("Missing database environment variables. Set DB_NAME, DB_USER, and DB_PASSWORD in Hostinger.");
@@ -281,12 +285,18 @@ async function migrate() {
       tax DECIMAL(12,2) NOT NULL DEFAULT 0,
       total DECIMAL(12,2) NOT NULL DEFAULT 0,
       payment_mode VARCHAR(40) NOT NULL DEFAULT 'Cash',
+      status VARCHAR(30) NOT NULL DEFAULT 'Printed',
       items_json LONGTEXT NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       INDEX sales_slips_date_idx (sale_date)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+
+  const [salesStatusColumns] = await pool.query("SHOW COLUMNS FROM sales_slips LIKE 'status'");
+  if (!salesStatusColumns.length) {
+    await pool.query("ALTER TABLE sales_slips ADD COLUMN status VARCHAR(30) NOT NULL DEFAULT 'Printed' AFTER payment_mode");
+  }
 }
 
 async function ensureSchema() {
@@ -488,6 +498,7 @@ function mapSale(row) {
     tax: number(row.tax),
     total: number(row.total),
     paymentMode: row.payment_mode,
+    status: row.status || "Printed",
     items,
   };
 }
@@ -605,7 +616,9 @@ async function getBootstrap() {
     ]);
   const vendors = await listVendors(vendorPurchases, vendorPayments);
   const todayDate = today();
-  const todaySales = salesHistory.filter((sale) => sale.saleDate === todayDate).reduce((sum, sale) => sum + sale.total, 0);
+  const todaySales = salesHistory
+    .filter((sale) => sale.saleDate === todayDate && !sameText(sale.status, "Pending"))
+    .reduce((sum, sale) => sum + sale.total, 0);
   const todayExpenses = expenses.filter((expense) => expense.expenseDate === todayDate).reduce((sum, expense) => sum + expense.amount, 0);
   const vendorDues = vendors.reduce((sum, vendor) => sum + vendor.pending, 0);
   const todayAttendance = employeeAttendance.filter((record) => record.attendanceDate === todayDate);
@@ -852,19 +865,21 @@ app.post("/api/attendance", asyncHandler(async (req, res) => {
   const employeeIds = Array.isArray(body.employeeIds)
     ? body.employeeIds.map((id) => String(id)).filter(Boolean)
     : [];
-
-  if (!employeeIds.length) {
-    await respondWithBootstrap(res, "employeeAttendance", [], 201);
-    return;
-  }
-
-  const placeholders = employeeIds.map(() => "?").join(",");
-  const employeeRows = await query(`SELECT * FROM employees WHERE id IN (${placeholders})`, employeeIds);
+  const selectedEmployeeIds = new Set(employeeIds);
+  const employeeRows = await query("SELECT * FROM employees ORDER BY name");
   const checkIn = nullableText(body.checkIn);
   const checkOut = nullableText(body.checkOut);
   const notes = nullableText(body.notes);
 
+  if (!employeeRows.length) {
+    await respondWithBootstrap(res, "employeeAttendance", [], 201);
+    return;
+  }
+
   for (const row of employeeRows) {
+    const isSelected = selectedEmployeeIds.has(String(row.id));
+    const rowStatus = isSelected ? status : "Absent";
+    const isAbsent = sameText(rowStatus, "Absent");
     await exec(
       `INSERT INTO employee_attendance
         (employee_id, employee_name, attendance_date, status, check_in, check_out, notes)
@@ -875,16 +890,28 @@ app.post("/api/attendance", asyncHandler(async (req, res) => {
         check_in = VALUES(check_in),
         check_out = VALUES(check_out),
         notes = VALUES(notes)`,
-      [row.id, row.name, attendanceDate, status, checkIn, checkOut, notes]
+      [
+        row.id,
+        row.name,
+        attendanceDate,
+        rowStatus,
+        isAbsent ? null : checkIn,
+        isAbsent ? null : checkOut,
+        isSelected ? notes : null,
+      ]
     );
   }
 
   if (attendanceDate === today() && employeeRows.length) {
-    await exec(`UPDATE employees SET status = ? WHERE id IN (${placeholders})`, [status, ...employeeIds]);
+    for (const row of employeeRows) {
+      const rowStatus = selectedEmployeeIds.has(String(row.id)) ? status : "Absent";
+      await exec("UPDATE employees SET status = ? WHERE id = ?", [rowStatus, row.id]);
+    }
   }
 
+  const currentEmployeeIds = new Set(employeeRows.map((row) => String(row.id)));
   const attendance = (await listEmployeeAttendance()).filter(
-    (record) => record.attendanceDate === attendanceDate && employeeIds.includes(String(record.employeeId))
+    (record) => record.attendanceDate === attendanceDate && currentEmployeeIds.has(String(record.employeeId))
   );
   await respondWithBootstrap(res, "employeeAttendance", attendance, 201);
 }));
@@ -1372,12 +1399,15 @@ app.post("/api/sales-slips", asyncHandler(async (req, res) => {
   const products = await listProducts();
   const saleDate = body.saleDate || today();
   const discount = number(body.discount);
+  const saleStatus = sameText(body.status, "Pending") ? "Pending" : "Printed";
   const items = (body.items || [])
     .map((item) => {
-      const product = products.find((entry) => String(entry.id) === String(item.productId)) || products.find((entry) => entry.name === item.product);
+      const product =
+        products.find((entry) => String(entry.id) === String(item.productId)) ||
+        products.find((entry) => sameText(entry.name, item.product));
       if (!product) return null;
       const qty = number(item.qty);
-      const total = qty * product.rate;
+      const total = item.total === undefined ? qty * product.rate : number(item.total, qty * product.rate);
       return {
         product: product.name,
         productId: product.id,
@@ -1398,11 +1428,24 @@ app.post("/api/sales-slips", asyncHandler(async (req, res) => {
   const countRows = await query("SELECT COUNT(*) AS count FROM sales_slips WHERE sale_date = ?", [saleDate]);
   const billNo = text(body.billNo, `${saleDate}-${String(number(countRows[0]?.count) + 1).padStart(2, "0")}`);
   const result = await exec(
-    `INSERT INTO sales_slips (bill_no, sale_date, sale_date_time, subtotal, discount, tax, total, payment_mode, items_json)
-     VALUES (?, ?, NOW(), ?, ?, ?, ?, ?, ?)`,
-    [billNo, saleDate, subtotal, discount, tax, total, text(body.paymentMode, "Cash"), JSON.stringify(items)]
+    `INSERT INTO sales_slips (bill_no, sale_date, sale_date_time, subtotal, discount, tax, total, payment_mode, status, items_json)
+     VALUES (?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       sale_date = VALUES(sale_date),
+       sale_date_time = NOW(),
+       subtotal = VALUES(subtotal),
+       discount = VALUES(discount),
+       tax = VALUES(tax),
+       total = VALUES(total),
+       payment_mode = VALUES(payment_mode),
+       status = VALUES(status),
+       items_json = VALUES(items_json)`,
+    [billNo, saleDate, subtotal, discount, tax, total, text(body.paymentMode, "Cash"), saleStatus, JSON.stringify(items)]
   );
-  const saleSlip = (await listSalesHistory()).find((item) => String(item.id) === String(result.insertId));
+  const salesHistory = await listSalesHistory();
+  const saleSlip =
+    salesHistory.find((item) => String(item.id) === String(result.insertId)) ||
+    salesHistory.find((item) => item.billNo === billNo);
   await respondWithBootstrap(res, "saleSlip", saleSlip, 201);
 }));
 

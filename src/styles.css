@@ -811,7 +811,7 @@ td {
   border-radius: 8px;
   background: #fffdf8;
   padding: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .sale-head,
@@ -847,6 +847,11 @@ td {
   min-height: 82px;
   border-top: 1px solid var(--line);
   padding: 12px 16px;
+  position: relative;
+}
+
+.sale-line:focus-within {
+  z-index: 20;
 }
 
 .sale-line:last-child {
@@ -868,6 +873,69 @@ td {
 
 .sale-line .sale-product-input {
   text-align: left;
+}
+
+.search-select {
+  position: relative;
+  min-width: 0;
+}
+
+.search-select input {
+  text-align: left;
+}
+
+.search-select-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 50;
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffdf8;
+  box-shadow: 0 18px 34px rgba(32, 18, 7, 0.22);
+  padding: 6px;
+}
+
+.search-select-option {
+  width: 100%;
+  min-height: 42px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  text-align: left;
+  font-weight: 900;
+}
+
+.search-select-option:hover,
+.search-select-option:focus {
+  background: #fff1d6;
+}
+
+.search-select-option span,
+.search-select-option small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-select-option small,
+.search-select-empty {
+  color: var(--muted);
+}
+
+.search-select-empty {
+  padding: 12px;
+  font-weight: 850;
 }
 
 .sale-line strong {
@@ -933,7 +1001,7 @@ td {
 }
 
 .sales-entry-panel .sale-options {
-  grid-template-columns: minmax(220px, 292px) minmax(220px, 292px);
+  grid-template-columns: repeat(3, minmax(170px, 292px));
   margin-top: 18px;
 }
 
@@ -1076,6 +1144,16 @@ td {
 
 .sales-report-panel table {
   min-width: 0;
+}
+
+.save-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.save-choice-grid .action-button {
+  min-height: 64px;
 }
 
 .sales-report-panel th:not(:first-child),
@@ -1372,6 +1450,26 @@ td {
   font-weight: 950;
 }
 
+.status-badge.pending {
+  background: #fff1d6;
+  color: #7d4a07;
+}
+
+.status-badge.printed {
+  background: #e9f9ee;
+  color: #1d6f38;
+}
+
+.status-badge.absent {
+  background: #ffe8e3;
+  color: #b23b26;
+}
+
+.status-badge.half-day {
+  background: #eef1ff;
+  color: #3549a8;
+}
+
 .tabs {
   display: flex;
   gap: 8px;
@@ -1386,6 +1484,19 @@ td {
 .attendance-checks {
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   margin: 16px 0;
+}
+
+.attendance-action-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.attendance-action-row span {
+  color: var(--muted);
+  font-weight: 850;
 }
 
 .attendance-checks label {
@@ -1583,6 +1694,10 @@ td {
   }
 
   .sales-entry-panel .sale-options {
+    grid-template-columns: 1fr;
+  }
+
+  .save-choice-grid {
     grid-template-columns: 1fr;
   }
 

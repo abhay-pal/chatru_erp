@@ -513,6 +513,22 @@ function sameText(a, b) {
   return lookupKey(a) === lookupKey(b);
 }
 
+function isPendingBill(bill) {
+  return sameText(bill?.status, "Pending");
+}
+
+function statusBadgeClass(status) {
+  if (sameText(status, "Pending")) return "status-badge pending";
+  if (sameText(status, "Printed")) return "status-badge printed";
+  if (sameText(status, "Absent")) return "status-badge absent";
+  if (sameText(status, "Half Day")) return "status-badge half-day";
+  return "status-badge";
+}
+
+function blankSaleItem() {
+  return { product: "", qty: 1 };
+}
+
 function categoryNames(categoryRows, type, fallbackValues = []) {
   return uniqueValues([
     ...categoryRows
@@ -1111,6 +1127,7 @@ export default function App() {
       checkOut: attendance.checkOut || "",
       notes: attendance.notes || "",
       employeeIds: attendance.employeeIds || [],
+      allEmployeeIds: staff.map((employee) => employee.id),
     };
     const result = await createBusinessRecord("/api/attendance", payload);
     if (result.bootstrap) {
@@ -1118,28 +1135,33 @@ export default function App() {
     } else {
       const selectedIds = new Set(payload.employeeIds.map(String));
       const localRows = staff
-        .filter((employee) => selectedIds.has(employee.id))
         .map((employee, index) =>
           normalizeEmployeeAttendance({
             id: `ATT-${payload.date}-${employee.id}`,
             employeeId: employee.id,
             employeeName: employee.name,
             attendanceDate: payload.date,
-            status: payload.status,
-            checkIn: payload.checkIn,
-            checkOut: payload.checkOut,
-            notes: payload.notes,
+            status: selectedIds.has(String(employee.id)) ? payload.status : "Absent",
+            checkIn: selectedIds.has(String(employee.id)) && !sameText(payload.status, "Absent") ? payload.checkIn : "",
+            checkOut: selectedIds.has(String(employee.id)) && !sameText(payload.status, "Absent") ? payload.checkOut : "",
+            notes: selectedIds.has(String(employee.id)) ? payload.notes : "",
           }, index)
         );
       setEmployeeAttendanceRows((records) => [
         ...localRows,
         ...records.filter(
-          (record) => !(record.attendanceDate === payload.date && selectedIds.has(record.employeeId))
+          (record) => !(
+            record.attendanceDate === payload.date &&
+            staff.some((employee) => String(employee.id) === String(record.employeeId))
+          )
         ),
       ]);
       if (payload.date === today()) {
         setStaff((records) =>
-          records.map((employee) => (selectedIds.has(employee.id) ? { ...employee, status: payload.status } : employee))
+          records.map((employee) => ({
+            ...employee,
+            status: selectedIds.has(String(employee.id)) ? payload.status : "Absent",
+          }))
         );
       }
     }
@@ -1827,7 +1849,7 @@ function OperationsDashboard({ salesBills, staff, materialRows, vendorRows, expe
 }
 
 function FinanceDashboard({ salesBills, staff, expenseRows, vendorRows, vendorPurchaseRows }) {
-  const monthSales = salesBills.reduce((sum, bill) => sum + bill.total, 0);
+  const monthSales = salesBills.filter((bill) => !isPendingBill(bill)).reduce((sum, bill) => sum + bill.total, 0);
   const totalExpenses = expenseRows.reduce((sum, item) => sum + item.amount, 0);
   const purchases = vendorPurchaseRows.reduce((sum, item) => sum + Number(item.amount || item.qty * item.rate || 0), 0);
   const salary = staff.reduce((sum, item) => sum + item.salary, 0);
@@ -1880,10 +1902,82 @@ function FinanceDashboard({ salesBills, staff, expenseRows, vendorRows, vendorPu
   );
 }
 
+function ProductSearchSelect({ value, products, onSelect, disabled = false }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const filteredProducts = useMemo(() => {
+    const source = query.trim()
+      ? products.filter((product) => matchesSearch(query, [product.name, product.category, product.unit, product.rate]))
+      : products;
+    return source.slice(0, 60);
+  }, [products, query]);
+
+  function closeDropdown() {
+    setOpen(false);
+    setQuery("");
+  }
+
+  function chooseProduct(product) {
+    onSelect(product.name);
+    closeDropdown();
+  }
+
+  return (
+    <div
+      className="search-select"
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) {
+          closeDropdown();
+        }
+      }}
+    >
+      <input
+        className="sale-product-input"
+        value={open ? query : value}
+        placeholder={open ? "Search product" : "Select product"}
+        disabled={disabled}
+        onFocus={() => {
+          setOpen(true);
+          setQuery("");
+        }}
+        onChange={(event) => {
+          setOpen(true);
+          setQuery(event.target.value);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") closeDropdown();
+          if (event.key === "Enter" && filteredProducts[0]) {
+            event.preventDefault();
+            chooseProduct(filteredProducts[0]);
+          }
+        }}
+      />
+      {open && (
+        <div className="search-select-menu" role="listbox">
+          {filteredProducts.map((product) => (
+            <button
+              className="search-select-option"
+              type="button"
+              key={product.id || product.name}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                chooseProduct(product);
+              }}
+            >
+              <span>{product.name}</span>
+              <small>{money(product.rate)} / {product.unit}</small>
+            </button>
+          ))}
+          {!filteredProducts.length && <div className="search-select-empty">No product found</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = "" }) {
   const saleProducts = productRows;
   const [items, setItems] = useState([]);
-  const [productSearch, setProductSearch] = useState("");
   const [shouldSeedItem, setShouldSeedItem] = useState(true);
   const [discount, setDiscount] = useState(0);
   const [gst, setGst] = useState(false);
@@ -1895,18 +1989,26 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
   const [billNo, setBillNo] = useState("");
   const [savedBillKey, setSavedBillKey] = useState("");
   const [savingBill, setSavingBill] = useState(false);
-  const productOptionId = "sales-slip-product-options";
-  const productOptions = useMemo(() => {
-    const filtered = saleProducts.filter((product) =>
-      matchesSearch(productSearch, [product.name, product.category, product.unit, product.rate])
-    );
-    return productSearch.trim() ? filtered : saleProducts;
-  }, [productSearch, saleProducts]);
+  const [saveChoiceOpen, setSaveChoiceOpen] = useState(false);
 
   const rows = items.map((item) => {
     const productName = item.product || "";
     const product = saleProducts.find((entry) => sameText(entry.name, productName));
     const hasManualAmount = item.amount !== undefined && item.amount !== "";
+    if (!productName) {
+      return {
+        ...item,
+        product: "",
+        qty: Number(item.qty || 0),
+        qtyInput: item.qty ?? "",
+        amountInput: item.amount ?? "",
+        rate: 0,
+        unit: "",
+        total: 0,
+        invalid: false,
+        empty: true,
+      };
+    }
     if (!product) {
       return {
         ...item,
@@ -1918,6 +2020,7 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
         unit: "",
         total: 0,
         invalid: true,
+        empty: false,
       };
     }
     const rate = Number(product.rate || 0);
@@ -1934,11 +2037,17 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
       unit: product.unit,
       total,
       invalid: false,
+      empty: false,
     };
   });
-  const subtotal = rows.reduce((sum, item) => sum + item.total, 0);
-  const tax = gst ? (subtotal - discount) * 0.05 : 0;
-  const total = Math.max(0, subtotal - Number(discount || 0) + tax);
+  const billRows = rows.filter(
+    (item) => !item.empty && !item.invalid && item.product && Number(item.qty || 0) > 0 && Number(item.total || 0) > 0
+  );
+  const subtotal = billRows.reduce((sum, item) => sum + item.total, 0);
+  const discountValue = Number(discount || 0);
+  const tax = gst ? Math.max(0, subtotal - discountValue) * 0.05 : 0;
+  const total = Math.max(0, subtotal - discountValue + tax);
+  const finalBills = bills.filter((bill) => !isPendingBill(bill));
   const filteredBills = bills.filter(
     (bill) =>
       (!historyDate || bill.date === historyDate) &&
@@ -1946,13 +2055,15 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
         bill.billNo,
         bill.date,
         bill.mode,
+        bill.status,
         bill.total,
         ...(bill.items || []).map((item) => item.product),
       ])
   );
+  const filteredFinalBills = filteredBills.filter((bill) => !isPendingBill(bill));
   const dailySalesReport = useMemo(() => {
     const byDate = new Map();
-    bills.forEach((bill) => {
+    finalBills.forEach((bill) => {
       const saleDate = bill.date || "-";
       const record = byDate.get(saleDate) || { date: saleDate, bills: 0, qty: 0, total: 0 };
       record.bills += 1;
@@ -1961,10 +2072,10 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
       byDate.set(saleDate, record);
     });
     return Array.from(byDate.values()).sort((a, b) => b.date.localeCompare(a.date));
-  }, [bills]);
+  }, [finalBills]);
   const itemSalesReport = useMemo(() => {
     const byItem = new Map();
-    filteredBills.forEach((bill) => {
+    filteredFinalBills.forEach((bill) => {
       (bill.items || []).forEach((item) => {
         const productName = item.product || "Item";
         const product = saleProducts.find((entry) => entry.name === productName);
@@ -1977,7 +2088,7 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
       });
     });
     return Array.from(byItem.values()).sort((a, b) => b.total - a.total);
-  }, [filteredBills, saleProducts]);
+  }, [filteredFinalBills, saleProducts]);
   const activeBillNo = billNo || nextBillNo;
   const receiptStamp = new Date().toLocaleString("en-IN", {
     day: "2-digit",
@@ -1990,10 +2101,10 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
     billNo: activeBillNo,
     date,
     mode,
-    discount: Number(discount || 0),
+    discount: discountValue,
     tax,
     total,
-    items: rows.map((item) => ({ product: item.product, qty: Number(item.qty || 0), total: item.total })),
+    items: billRows.map((item) => ({ product: item.product, qty: Number(item.qty || 0), total: item.total })),
   });
 
   useEffect(() => {
@@ -2003,11 +2114,11 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
   }, [nextBillNo, savedBillKey]);
 
   useEffect(() => {
-    if (shouldSeedItem && !items.length && saleProducts[0]) {
-      setItems([{ product: saleProducts[0].name, qty: 1 }]);
+    if (shouldSeedItem && !items.length) {
+      setItems([blankSaleItem()]);
       setShouldSeedItem(false);
     }
-  }, [items.length, saleProducts, shouldSeedItem]);
+  }, [items.length, shouldSeedItem]);
 
   function changeSaleProduct(index, productName) {
     setItems((records) =>
@@ -2058,9 +2169,8 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
   }
 
   function addSaleItem() {
-    if (!saleProducts[0]) return;
     setShouldSeedItem(false);
-    setItems((records) => [...records, { product: saleProducts[0].name, qty: 1 }]);
+    setItems((records) => [...records, blankSaleItem()]);
     setSavedBillKey("");
   }
 
@@ -2072,35 +2182,57 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
 
   function startNewBill() {
     const freshDate = today();
-    setItems(saleProducts[0] ? [{ product: saleProducts[0].name, qty: 1 }] : []);
+    setItems([blankSaleItem()]);
     setShouldSeedItem(false);
     setDiscount(0);
     setGst(false);
     setMode("Cash");
     setDate(freshDate);
     setSavedBillKey("");
-    setBillNo(`${freshDate}-${String(bills.length + 1).padStart(2, "0")}`);
+    setBillNo("");
+    setSaveChoiceOpen(false);
     setMessage("Ready");
   }
 
-  async function saveCurrentBill({ forPrint = false } = {}) {
+  function resetSaleSlip(messageText = "Ready") {
+    setItems([blankSaleItem()]);
+    setShouldSeedItem(false);
+    setDiscount(0);
+    setGst(false);
+    setMode("Cash");
+    setDate(today());
+    setSavedBillKey("");
+    setBillNo("");
+    setSaveChoiceOpen(false);
+    setMessage(messageText);
+  }
+
+  function validateBill() {
+    if (!saleProducts.length) {
+      setMessage("Add products before saving a bill.");
+      return false;
+    }
+    if (!billRows.length) {
+      setMessage("Select at least one product with amount before saving.");
+      return false;
+    }
+    if (rows.some((item) => item.invalid)) {
+      setMessage("Select valid products before saving a bill.");
+      return false;
+    }
+    return true;
+  }
+
+  async function saveCurrentBill({ forPrint = false, status: billStatus = "Printed" } = {}) {
     if (savingBill) {
       return null;
     }
-    if (!saleProducts.length || !rows.length) {
-      setMessage("Add products before saving a bill.");
+    if (!validateBill()) {
       return null;
     }
-    if (rows.some((item) => item.invalid || !item.product || !item.rate)) {
-      setMessage("Select valid products before saving a bill.");
-      return null;
-    }
-    if (rows.some((item) => Number(item.qty || 0) <= 0 || Number(item.total || 0) <= 0)) {
-      setMessage("Qty and amount must be greater than 0.");
-      return null;
-    }
-    if (savedBillKey === currentBillKey) {
-      setMessage(`Bill ${activeBillNo} saved`);
+    const saveKey = `${billStatus}:${currentBillKey}`;
+    if (savedBillKey === saveKey) {
+      setMessage(`Bill ${activeBillNo} ${billStatus.toLowerCase()}`);
       return { alreadySaved: true };
     }
 
@@ -2110,15 +2242,16 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
         billNo: activeBillNo,
         date,
         mode,
-        items: rows,
+        status: billStatus,
+        items: billRows,
         subtotal,
-        discount: Number(discount || 0),
+        discount: discountValue,
         tax,
         total,
         createdAt: new Date().toISOString(),
       });
-      setSavedBillKey(currentBillKey);
-      setMessage(`Bill ${activeBillNo} saved${forPrint ? " - printing" : ""}`);
+      setSavedBillKey(saveKey);
+      setMessage(`Bill ${activeBillNo} ${billStatus.toLowerCase()}${forPrint ? " - printing" : ""}`);
       return { alreadySaved: false };
     } catch {
       setMessage("Bill save failed. Please try again.");
@@ -2128,14 +2261,44 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
     }
   }
 
-  async function saveBill() {
-    await saveCurrentBill();
+  function openSaveChoices() {
+    if (validateBill()) setSaveChoiceOpen(true);
+  }
+
+  async function savePendingBill() {
+    const pendingBillNo = activeBillNo;
+    const saved = await saveCurrentBill({ status: "Pending" });
+    if (!saved) return;
+    resetSaleSlip(`Bill ${pendingBillNo} saved as pending`);
   }
 
   async function printSlip() {
-    const saved = await saveCurrentBill({ forPrint: true });
+    const printedBillNo = activeBillNo;
+    const saved = await saveCurrentBill({ forPrint: true, status: "Printed" });
     if (!saved) return;
-    setTimeout(() => window.print(), 80);
+    setTimeout(() => {
+      window.print();
+      resetSaleSlip(`Bill ${printedBillNo} printed and saved`);
+    }, 80);
+  }
+
+  function reopenBill(bill) {
+    const restoredItems = (bill.items || []).map((item) => ({
+      product: item.product || "",
+      qty: numberInputValue(item.qty || 0, 3),
+      amount: numberInputValue(item.total || Number(item.qty || 0) * Number(item.rate || 0), 2),
+    }));
+    setItems(restoredItems.length ? restoredItems : [blankSaleItem()]);
+    setShouldSeedItem(false);
+    setDiscount(Number(bill.discount || 0));
+    setGst(Number(bill.tax || 0) > 0);
+    setMode(bill.mode || "Cash");
+    setDate(bill.date || today());
+    setBillNo(bill.billNo || "");
+    setSavedBillKey("");
+    setSaveChoiceOpen(false);
+    setMessage(`Pending bill ${bill.billNo} reopened`);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   return (
@@ -2157,7 +2320,7 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
                 <PackageSearch size={18} />
                 Add item
               </button>
-              <button className="action-button dark" type="button" onClick={saveBill} disabled={savingBill}>
+              <button className="action-button dark" type="button" onClick={openSaveChoices} disabled={savingBill}>
                 <NotebookTabs size={18} />
                 {savingBill ? "Saving..." : "Save bill"}
               </button>
@@ -2168,19 +2331,6 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
             </div>
           </div>
           <div className="sale-lines">
-            <label className="inline-search sale-product-search">
-              <Search size={17} />
-              <input
-                value={productSearch}
-                placeholder="Search product"
-                onChange={(event) => setProductSearch(event.target.value)}
-              />
-            </label>
-            <datalist id={productOptionId}>
-              {productOptions.map((product) => (
-                <option key={product.id || product.name} value={product.name} />
-              ))}
-            </datalist>
             <div className="sale-head">
               <span>PRODUCT</span>
               <span>AMOUNT</span>
@@ -2192,12 +2342,10 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
             {!saleProducts.length && <div className="empty-state">No products found</div>}
             {rows.map((item, index) => (
               <div className="sale-line" key={`${item.product}-${index}`}>
-                <input
-                  className="sale-product-input"
-                  list={productOptionId}
+                <ProductSearchSelect
                   value={item.product}
-                  placeholder="Search product"
-                  onChange={(event) => changeSaleProduct(index, event.target.value)}
+                  products={saleProducts}
+                  onSelect={(productName) => changeSaleProduct(index, productName)}
                 />
                 <input
                   type="number"
@@ -2224,10 +2372,37 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
           <div className="sale-options">
             <label>
               DISCOUNT
-              <input type="number" value={discount} onChange={(event) => setDiscount(event.target.value)} />
+              <input
+                type="number"
+                value={discount}
+                onChange={(event) => {
+                  setDiscount(event.target.value);
+                  setSavedBillKey("");
+                }}
+              />
+            </label>
+            <label>
+              PAYMENT MODE
+              <select
+                value={mode}
+                onChange={(event) => {
+                  setMode(event.target.value);
+                  setSavedBillKey("");
+                }}
+              >
+                <option>Cash</option>
+                <option>UPI</option>
+              </select>
             </label>
             <label className="check-label">
-              <input type="checkbox" checked={gst} onChange={(event) => setGst(event.target.checked)} />
+              <input
+                type="checkbox"
+                checked={gst}
+                onChange={(event) => {
+                  setGst(event.target.checked);
+                  setSavedBillKey("");
+                }}
+              />
               GST 5%
             </label>
           </div>
@@ -2252,7 +2427,7 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
               <span>Bill: {activeBillNo}</span>
               <span>{receiptStamp}</span>
             </div>
-            {rows.map((item, index) => (
+            {billRows.map((item, index) => (
               <div className="slip-row" key={`${item.product}-${item.qty}-${index}`}>
                 <span>{item.product} x {item.qty}</span>
                 <b>{money(item.total)}</b>
@@ -2267,6 +2442,20 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
           </div>
         </section>
       </section>
+      {saveChoiceOpen && (
+        <Modal title="Save bill" eyebrow="Bill action" onClose={() => setSaveChoiceOpen(false)}>
+          <div className="save-choice-grid">
+            <button className="action-button" type="button" onClick={printSlip} disabled={savingBill}>
+              <Printer size={18} />
+              Print
+            </button>
+            <button className="action-button dark" type="button" onClick={savePendingBill} disabled={savingBill}>
+              <NotebookTabs size={18} />
+              Pending
+            </button>
+          </div>
+        </Modal>
+      )}
       <section className="panel bill-history-panel">
         <div className="panel-header history-header">
           <div>
@@ -2279,13 +2468,21 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
           </label>
         </div>
         <DataTable
-          columns={["Bill No", "Date", "Items", "Mode", "Total"]}
+          columns={["Bill No", "Date", "Items", "Mode", "Status", "Total", "Action"]}
           rows={filteredBills.map((bill) => [
             bill.billNo,
             bill.date,
             bill.items.map((item) => item.product).join(", "),
             bill.mode,
+            <span className={statusBadgeClass(bill.status)}>{bill.status || "Printed"}</span>,
             money(bill.total),
+            isPendingBill(bill) ? (
+              <button className="ghost-button table-action-button" type="button" onClick={() => reopenBill(bill)}>
+                Reopen
+              </button>
+            ) : (
+              "-"
+            ),
           ])}
           empty="No saved bills for selected date"
         />
@@ -4368,7 +4565,7 @@ function AttendancePage({ staff, attendanceRows = [], onSaveAttendance, globalSe
   );
 
   useEffect(() => {
-    setSelectedIds(staff.map((employee) => employee.id));
+    setSelectedIds(staff.map((employee) => String(employee.id)));
   }, [staff]);
 
   function toggleEmployee(employeeId) {
@@ -4377,17 +4574,22 @@ function AttendancePage({ staff, attendanceRows = [], onSaveAttendance, globalSe
     );
   }
 
+  function selectAllEmployees() {
+    setSelectedIds(staff.map((employee) => String(employee.id)));
+  }
+
+  function clearSelectedEmployees() {
+    setSelectedIds([]);
+  }
+
   async function saveAttendance(event) {
     event.preventDefault();
-    if (!selectedIds.length) {
-      setMessage("Select employees before updating attendance");
-      return;
-    }
     setSaving(true);
     try {
       await onSaveAttendance({ date, status, checkIn, checkOut, employeeIds: selectedIds });
       setFilterDate(date);
-      setMessage(`Attendance updated for ${selectedIds.length} employee${selectedIds.length === 1 ? "" : "s"}`);
+      const absentCount = Math.max(0, staff.length - selectedIds.length);
+      setMessage(`Attendance updated: ${selectedIds.length} marked ${status}, ${absentCount} absent`);
     } catch {
       setMessage("Attendance update failed. Please try again.");
     } finally {
@@ -4397,7 +4599,7 @@ function AttendancePage({ staff, attendanceRows = [], onSaveAttendance, globalSe
 
   return (
     <Page>
-      <Panel title="Attendance" subtitle="Batch update attendance" action="Clear all" onAction={() => setSelectedIds([])}>
+      <Panel title="Attendance" subtitle="Batch update attendance" action="Clear all" onAction={clearSelectedEmployees}>
         <form onSubmit={saveAttendance}>
           <div className="form-grid">
             <label>DATE<input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
@@ -4405,10 +4607,19 @@ function AttendancePage({ staff, attendanceRows = [], onSaveAttendance, globalSe
             <label>CHECK IN<input type="time" value={checkIn} onChange={(event) => setCheckIn(event.target.value)} /></label>
             <label>CHECK OUT<input type="time" value={checkOut} onChange={(event) => setCheckOut(event.target.value)} /></label>
           </div>
+          <div className="attendance-action-row">
+            <button className="ghost-button" type="button" onClick={selectAllEmployees}>
+              Select all
+            </button>
+            <button className="ghost-button" type="button" onClick={clearSelectedEmployees}>
+              Clear all
+            </button>
+            <span>{selectedIds.length} selected / {staff.length - selectedIds.length} absent</span>
+          </div>
           <div className="attendance-checks">
             {staff.map((employee) => (
               <label key={employee.id}>
-                <input type="checkbox" checked={selectedIds.includes(employee.id)} onChange={() => toggleEmployee(employee.id)} />
+                <input type="checkbox" checked={selectedIds.includes(String(employee.id))} onChange={() => toggleEmployee(String(employee.id))} />
                 <span>{employee.name}</span>
                 <small>{employee.role}</small>
               </label>
@@ -4416,7 +4627,7 @@ function AttendancePage({ staff, attendanceRows = [], onSaveAttendance, globalSe
           </div>
           {message && <p className="db-message">{message}</p>}
           <button className="action-button full" type="submit" disabled={saving}>
-            {saving ? "Updating..." : `Update ${selectedIds.length} employee${selectedIds.length === 1 ? "" : "s"}`}
+            {saving ? "Updating..." : `Update ${staff.length} employee${staff.length === 1 ? "" : "s"}`}
           </button>
         </form>
       </Panel>
@@ -4431,7 +4642,7 @@ function AttendancePage({ staff, attendanceRows = [], onSaveAttendance, globalSe
           rows={filteredAttendanceRows.map((row) => [
             row.attendanceDate,
             row.employeeName,
-            <span className="status-badge">{row.status}</span>,
+            <span className={statusBadgeClass(row.status)}>{row.status}</span>,
             row.checkIn || "-",
             row.checkOut || "-",
           ])}
@@ -5361,5 +5572,5 @@ function CellWithActions({ label, children }) {
 }
 
 function totalForDate(bills, date) {
-  return bills.filter((bill) => bill.date === date).reduce((sum, bill) => sum + bill.total, 0);
+  return bills.filter((bill) => bill.date === date && !isPendingBill(bill)).reduce((sum, bill) => sum + bill.total, 0);
 }
