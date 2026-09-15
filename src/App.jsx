@@ -1994,7 +1994,8 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
   const rows = items.map((item) => {
     const productName = item.product || "";
     const product = saleProducts.find((entry) => sameText(entry.name, productName));
-    const hasManualAmount = item.amount !== undefined && item.amount !== "";
+    const hasManualAmount = item.amount !== undefined;
+    const amountIsBlank = hasManualAmount && item.amount === "";
     if (!productName) {
       return {
         ...item,
@@ -2031,7 +2032,7 @@ function SalesSlipPage({ bills, status, productRows, onSaveBill, globalSearch = 
       ...item,
       product: product.name,
       qty,
-      qtyInput: hasManualAmount ? numberInputValue(qty, 3) : item.qty ?? "",
+      qtyInput: amountIsBlank ? "" : hasManualAmount ? numberInputValue(qty, 3) : item.qty ?? "",
       amountInput: hasManualAmount ? item.amount : numberInputValue(total, 2),
       rate,
       unit: product.unit,
